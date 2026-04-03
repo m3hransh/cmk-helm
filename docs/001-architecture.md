@@ -26,28 +26,49 @@ Each module can be tested independently. The `api/` tests run without a terminal
 
 ---
 
+## Real Server Structure (discovered by testing)
+
+The root URL `https://download.checkmk.com/checkmk/` returns an Apache autoindex listing with **version directories**, not edition-specific packages. Two directory formats exist:
+
+| Directory | Type | cmk-dev-install arg |
+|-----------|------|---------------------|
+| `2.5.0-2026.04.03/` | Daily build | `2.5.0-2026-04-03` (dots→hyphens) |
+| `2.4.0p24/` | Stable patch | `2.4.0p24` (unchanged) |
+| `2.5.0b2/` | Beta | `2.5.0b2` (unchanged) |
+
+Inside each version directory, `.deb` files encode the edition:
+```
+check-mk-pro-2.5.0-2026.04.03_0.noble_amd64.deb
+check-mk-cloud-2.4.0p24_0.jammy_amd64.deb
+```
+
+**Implication:** We parse the root for *versions*, then let the user pick an *edition* separately. No edition-scanning of subdirectories needed — one HTTP request is sufficient.
+
+---
+
 ## State Machine Pattern
 
-The UI is a state machine with three screens:
+The UI is a state machine with four screens:
 
 ```
-PackageList  ──Enter──▶  Configure  ──Enter──▶  Installing
-     ▲                      │
-     └────────Esc────────────┘
+VersionList  ──Enter──▶  EditionPicker  ──Enter──▶  Configure  ──Enter──▶  Installing
+     ▲                        │                          │
+     └────────────Esc──────────┴──────────────Esc─────────┘
 ```
 
 Represented in Rust as an enum:
 
 ```rust
 enum Screen {
-    PackageList,
-    Configure { selected: Package, site_input: String },
+    VersionList,
+    EditionPicker { version: Version, list_state: ListState },
+    Configure { version: Version, edition: Edition, site_input: String },
     Installing { config: InstallConfig },
 }
 ```
 
 **Why an enum?**  
-Rust enums with data make *illegal states unrepresentable*. It is impossible to be in `Installing` without an `InstallConfig`, and impossible to have an `InstallConfig` without a selected `Package`. The compiler enforces this — no runtime null checks needed.
+Rust enums with data make *illegal states unrepresentable*. It is impossible to be in `Installing` without a full `InstallConfig`, and impossible to be in `Configure` without both a `Version` and an `Edition`. The compiler enforces this — no runtime null checks needed.
 
 ---
 

@@ -219,6 +219,68 @@ In Rust, integer overflow/underflow **panics** in debug builds (it's a bug). `sa
 
 ---
 
+## `if let ... else { return }` — Guarded Enum Access
+
+When a method can be called on multiple enum variants but only does work for one, use:
+
+```rust
+fn render_configure(&self, frame: &mut Frame, area: Rect) {
+    let Screen::Configure { version, edition, site_input } = &self.screen else { return };
+    // now `version`, `edition`, `site_input` are in scope
+}
+```
+
+The `let ... else { ... }` block is a "let-else" statement (stable since Rust 1.65). The `else` branch must diverge (`return`, `break`, `panic!`). This avoids deeply nested `if let` or `match` arms when you only care about one variant.
+
+---
+
+## `#[tokio::test]` — Async Tests
+
+The standard `#[test]` macro doesn't understand `async`. For async test functions, use:
+
+```rust
+#[tokio::test]
+async fn my_test() {
+    let result = some_async_fn().await;
+    assert!(result.is_ok());
+}
+```
+
+`#[tokio::test]` sets up a single-threaded tokio runtime scoped to the test function. It's the async equivalent of `#[test]` — nothing else changes.
+
+---
+
+## `#[ignore]` — Opt-in Tests
+
+Tests that require external resources (network, credentials, running services) are marked `#[ignore]`:
+
+```rust
+#[tokio::test]
+#[ignore = "requires ~/.cmk-credentials and network access"]
+async fn integration_test() { ... }
+```
+
+- `cargo test` — skips ignored tests
+- `cargo test -- --ignored` — runs ONLY ignored tests
+- `cargo test -- --include-ignored` — runs all tests
+
+The string after `=` appears in test output and explains *why* the test is ignored.
+
+---
+
+## `matches!` Macro — Pattern Matching in Assertions
+
+```rust
+assert!(matches!(
+    &versions[0].kind,
+    VersionKind::Daily { date } if date == "2026.04.03"
+));
+```
+
+`matches!(expr, pattern)` returns `true` if `expr` matches `pattern`. You can add a guard clause with `if`. It's cleaner than `match expr { pattern => true, _ => false }` in test assertions.
+
+---
+
 ## To Explore Next
 
 - [ ] Lifetimes (`'a`) — when the borrow checker needs explicit annotations

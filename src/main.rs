@@ -6,25 +6,30 @@ mod api;
 mod installer;
 mod ui;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use api::CMK_DOWNLOAD_URL;
 
 // `#[tokio::main]` rewrites `main` into an async runtime bootstrap.
-// Only the top-level and anything in `api/` needs to be async — the
-// TUI event loop itself stays synchronous for predictable frame timing.
+// Only the top-level and `api/` need to be async — the TUI event loop
+// stays synchronous for predictable frame timing.
 #[tokio::main]
 async fn main() -> Result<()> {
-    // `ratatui::init()` enables raw mode (keypresses delivered immediately,
-    // no line buffering) and switches to the alternate screen buffer so the
-    // normal terminal contents are preserved and restored on exit.
+    // Fetch packages BEFORE entering raw mode so that any error (missing
+    // credentials, network failure) prints cleanly to the normal terminal
+    // instead of corrupting the alternate screen buffer.
+    let versions = api::fetch_versions(CMK_DOWNLOAD_URL)
+        .await
+        .context("Failed to fetch version list from server")?;
+
+    // `ratatui::init()` enables raw mode and switches to the alternate
+    // screen buffer. Everything after this point must call `ratatui::restore()`
+    // before exiting, even on error — otherwise the shell is left broken.
     let terminal = ratatui::init();
 
-    // Run the application. `?` propagates any error upward.
-    // We capture the result first so we can always restore the terminal,
-    // even if the app crashed — otherwise the user's shell stays broken.
-    let result = ui::App::new().run(terminal).await;
+    let result = ui::App::new(versions).run(terminal).await;
 
-    // `ratatui::restore()` disables raw mode and returns to the main screen.
-    // Called unconditionally so a panic mid-session doesn't wreck the terminal.
+    // Restore terminal unconditionally — if the app panicked, the panic
+    // hook fires first, but `restore()` here covers the normal error path.
     ratatui::restore();
 
     result
