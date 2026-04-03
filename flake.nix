@@ -26,8 +26,12 @@
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs { inherit system overlays; };
 
-        # Pin a stable Rust toolchain and bundle useful development extensions
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+        # Pin Rust to 1.88.0 explicitly rather than `stable.latest`.
+        # Reason: ratatui's `instability` transitive dep requires rustc ≥ 1.88.
+        # Using a fixed version ensures the dev shell and CI always agree
+        # on the toolchain, regardless of when `nix flake update` was last run.
+        # Bump this when upgrading dependencies that need a newer compiler.
+        rustToolchain = pkgs.rust-bin.stable."1.88.0".default.override {
           extensions = [ "rust-src" "rust-analyzer" "clippy" "rustfmt" ];
         };
 

@@ -1,4 +1,5 @@
 /target
 result
 .direnv
-Cargo.lock
+# Cargo.lock is intentionally tracked for binary crates.
+# crane (Nix build) requires it present and not gitignored.

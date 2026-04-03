@@ -106,8 +106,24 @@ cargo generate-lockfile
 cargo run
 ```
 
-> **Why is Cargo.lock in .gitignore?**
-> For a binary application it's actually conventional to *commit* Cargo.lock. It's in `.gitignore` here for the initial scaffold phase. Remove the entry once you're happy with the dependency set.
+> **Cargo.lock must be committed and NOT gitignored.**
+> crane's `cleanCargoSource` strips files that match `.gitignore`. If `Cargo.lock` is ignored, crane cannot find it in the Nix store and the dev shell evaluation fails with:
+> `error: unable to find Cargo.lock at /nix/store/...`
+> For binary crates, committing `Cargo.lock` is the correct practice anyway — it ensures reproducible builds.
+
+---
+
+## Pinning the Rust Toolchain Version
+
+`flake.nix` uses `pkgs.rust-bin.stable."1.88.0"` instead of `stable.latest`. This is intentional:
+
+- `stable.latest` changes whenever `nix flake update` is run, which can silently break builds if a dependency bumped its MSRV (Minimum Supported Rust Version)
+- A pinned version makes the toolchain an explicit, reviewed choice — like pinning a Docker image tag
+
+**Lesson learned:** `ratatui 0.28+` pulls in `instability` (for marking unstable APIs) and `darling` (a proc-macro helper). Both bumped MSRV to 1.88 in their 0.3.12 / 0.23.0 releases respectively. The fix was:
+
+1. `cargo update instability@0.3.12 --precise 0.3.7` — this also downgraded `darling` to 0.20.11 automatically (instability depends on darling)
+2. Pin `flake.nix` toolchain to `1.88.0` — so future users in the Nix dev shell won't hit the same issue once the transitive deps are upgraded again
 
 ---
 

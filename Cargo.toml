@@ -8,11 +8,15 @@ name = "cmk-cockpit"
 path = "src/main.rs"
 
 [dependencies]
-# TUI framework — handles drawing, layout, and widgets
-ratatui = "0.29"
+# TUI framework — handles drawing, layout, and widgets.
+# Pinned to 0.28.x: ratatui 0.29 introduced a dependency on `instability`
+# which requires rustc ≥ 1.88. Remove the upper bound once the toolchain
+# in flake.nix is updated to stable 1.88+.
+ratatui = ">=0.28, <0.29"
 
-# Terminal backend — raw mode, alternate screen, key events
-crossterm = "0.28"
+# Terminal backend — raw mode, alternate screen, key events.
+# crossterm 0.27 matches what ratatui 0.28 depends on.
+crossterm = "0.27"
 
 # Async runtime — needed for HTTP requests
 tokio = { version = "1", features = ["full"] }
