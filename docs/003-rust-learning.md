@@ -281,6 +281,36 @@ assert!(matches!(
 
 ---
 
+## `std::sync::LazyLock` — Compile Once, Use Everywhere
+
+Regex compilation is expensive. Doing it inside a loop compiles the pattern on every call. `LazyLock` initialises a value the first time it is accessed and reuses it forever:
+
+```rust
+use std::sync::LazyLock;
+
+static ROW_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"href="([^"/]+)/"…"#).unwrap()
+});
+```
+
+This is zero-cost after the first access. Stable since Rust 1.80. The `static` keyword gives it program lifetime — it lives as long as the binary runs, which is safe for global resources like compiled regexes.
+
+---
+
+## `.unwrap_or_default()` — Graceful Fallback
+
+When you have a `Result<Vec<T>>` and want an empty `Vec` on error:
+
+```rust
+let installed = some_fallible_fn().unwrap_or_default();
+// equivalent to:
+let installed = some_fallible_fn().unwrap_or_else(|_| Vec::new());
+```
+
+`Default` is a trait that many types implement. `Vec<T>` defaults to an empty Vec. This pattern is useful for non-critical data (like locally installed versions) where absence is acceptable — you show an empty panel rather than crashing.
+
+---
+
 ## To Explore Next
 
 - [ ] Lifetimes (`'a`) — when the borrow checker needs explicit annotations

@@ -179,6 +179,67 @@ pub fn list_installed_versions() -> Result<Vec<String>> {
     Ok(versions)
 }
 
+// ── Installed Sites ───────────────────────────────────────────────────────────
+
+/// A site registered with OMD.
+#[derive(Debug, Clone)]
+pub struct InstalledSite {
+    /// Site name, e.g. "v240"
+    pub name: String,
+    /// Full OMD version string, e.g. "2.4.0p23.cee"
+    pub version: String,
+    /// True if this is the system default version.
+    pub is_default: bool,
+}
+
+/// Lists all OMD sites by running `omd sites`.
+///
+/// `omd sites` output format:
+/// ```text
+/// SITE             VERSION                  COMMENTS
+/// v240             2.4.0-2026.03.22.cce
+/// test             2.6.0-2026.03.31.ultimate default version
+/// ```
+///
+/// The first line is a header and is skipped. Each subsequent non-empty line
+/// has: SITE (col 0), VERSION (col 1), optional COMMENTS (col 2+).
+/// "default version" in the comments marks the system default site.
+pub fn list_installed_sites() -> Result<Vec<InstalledSite>> {
+    let output = Command::new("omd")
+        .args(["sites"])
+        .output()
+        .context("Failed to run omd sites — is omd installed?")?;
+
+    if !output.status.success() {
+        bail!("omd sites exited with status {:?}", output.status.code());
+    }
+
+    let stdout = std::str::from_utf8(&output.stdout)
+        .context("omd sites output is not valid UTF-8")?;
+
+    let sites = stdout
+        .lines()
+        .skip(1) // skip the "SITE  VERSION  COMMENTS" header
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|line| {
+            // Rust concept: `split_whitespace()` splits on any whitespace and
+            // returns an iterator. Collecting into a Vec lets us index by column.
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            if cols.len() < 2 {
+                return None;
+            }
+            let comments = cols[2..].join(" ");
+            Some(InstalledSite {
+                name: cols[0].to_string(),
+                version: cols[1].to_string(),
+                is_default: comments.contains("default"),
+            })
+        })
+        .collect();
+
+    Ok(sites)
+}
+
 // ── Helper ───────────────────────────────────────────────────────────────────
 
 /// Returns true if `name` can be found on PATH.

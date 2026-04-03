@@ -143,6 +143,25 @@ Vec<Package>  ──────────────▶  ui::App::packages
 
 ---
 
+## Layout
+
+```
+┌─ CMK Cockpit ── [2.6.0] [2.5.0] [2.4.0] … ──────────────────────────┐
+├──────────────────────────────────┬───────────────────────────────────┤
+│  Left pane (60%)                 │  Right pane (40%) — always shown  │
+│  screen-dependent:               │                                   │
+│  VersionList / EditionPicker /   │  Installed Versions               │
+│  Configure / Installing          │  ─────────────────────────────    │
+│                                  │  Installed Sites (★ = default)    │
+├──────────────────────────────────┴───────────────────────────────────┤
+│  Key hints (context-sensitive)                                        │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+The right panel is **persistent** — it shows locally installed OMD versions and sites regardless of which left-pane screen is active. Data is fetched once at startup via `omd versions -b` and `omd sites`. If `omd` is unavailable, the panels show "(none found)" instead of crashing.
+
+---
+
 ## Future Work
 
 - [ ] Replace stub packages with real `fetch_packages()` call in `main()`

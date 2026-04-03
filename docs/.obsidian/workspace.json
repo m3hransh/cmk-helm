@@ -1,0 +1,194 @@
+{
+  "main": {
+    "id": "d55a031d24f8e2d5",
+    "type": "split",
+    "children": [
+      {
+        "id": "8bc0636b0682290b",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "355e2865c5dafd9b",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "003-rust-learning.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "003-rust-learning"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "577c6df2e4ed0238",
+    "type": "split",
+    "children": [
+      {
+        "id": "3b9e000170e9d2f9",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "b8573b3fb43a2875",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "f066317095e62082",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "9fa91bbd1aa0a55b",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "3bbd2cf9d801b4d1",
+    "type": "split",
+    "children": [
+      {
+        "id": "8d1401b3c3af548b",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "0ff9f8a51d5dd749",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "003-rust-learning.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks for 003-rust-learning"
+            }
+          },
+          {
+            "id": "1e39d451be5b8863",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "003-rust-learning.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links from 003-rust-learning"
+            }
+          },
+          {
+            "id": "cc5e2e09b8be8413",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "b3eb30e0b842c357",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "7b770c0da8f03aa4",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "003-rust-learning.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of 003-rust-learning"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
+    }
+  },
+  "active": "355e2865c5dafd9b",
+  "lastOpenFiles": [
+    "003-rust-learning.md.tmp.38445.1775223834802",
+    "001-architecture.md.tmp.38445.1775223780564",
+    "002-nix-setup.md",
+    "001-architecture.md",
+    "000-index.md"
+  ]
+}
