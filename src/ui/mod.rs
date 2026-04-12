@@ -26,7 +26,9 @@
 //   q — quit
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -35,8 +37,10 @@ use ratatui::{
     DefaultTerminal, Frame,
 };
 
+use tokio::sync::mpsc;
+
 use crate::api::{Edition, VersionGroup, VersionKind};
-use crate::installer::{InstallConfig, InstalledSite};
+use crate::installer::{self, InstallConfig, InstalledSite, Job, JobId, JobMessage, JobStatus};
 
 // ── Pane Focus ───────────────────────────────────────────────────────────────
 //
@@ -80,6 +84,18 @@ enum LeftPaneMode {
     },
 }
 
+// ── Pane Geometry ────────────────────────────────────────────────────────────
+//
+// Stored each frame so mouse clicks can be mapped to panes via hit-testing.
+
+#[derive(Debug, Default, Clone, Copy)]
+struct PaneRects {
+    version_browser: Rect,
+    installed_versions: Rect,
+    installed_sites: Rect,
+    log_panel: Rect,
+}
+
 // ── App ──────────────────────────────────────────────────────────────────────
 
 pub struct App {
@@ -95,15 +111,27 @@ pub struct App {
     active_pane: ActivePane,
     left_mode: LeftPaneMode,
 
+    // ── Pane geometry (updated each render for mouse hit-testing) ────────
+    pane_rects: PaneRects,
+
     // ── Right panel state (now interactive with ListState) ──────────────────
     installed_versions: Vec<String>,
     versions_list_state: ListState,
     installed_sites: Vec<InstalledSite>,
     sites_list_state: ListState,
 
+    // ── Job system ──────────────────────────────────────────────────────────
+    //
+    // Rust concept: `mpsc::unbounded_channel` creates a channel with no
+    // capacity limit. The sender is cloned into each spawned tokio task;
+    // the receiver stays in the App and is drained each frame with `try_recv()`.
+    // "Unbounded" is fine here because job output is bounded by subprocess speed.
+    jobs: Vec<Job>,
+    next_job_id: JobId,
+    job_tx: mpsc::UnboundedSender<JobMessage>,
+    job_rx: mpsc::UnboundedReceiver<JobMessage>,
+
     // ── Log panel ───────────────────────────────────────────────────────────
-    /// Log lines from all jobs. Each entry is a formatted string.
-    log_lines: Vec<String>,
     /// Scroll offset for the log panel (0 = show latest at bottom).
     log_scroll: usize,
 
@@ -126,17 +154,23 @@ impl App {
             sites_list_state.select(Some(0));
         }
 
+        let (job_tx, job_rx) = mpsc::unbounded_channel();
+
         Self {
             version_groups,
             active_tab: 0,
             table_state: TableState::default().with_selected(0),
             active_pane: ActivePane::VersionBrowser,
             left_mode: LeftPaneMode::Browse,
+            pane_rects: PaneRects::default(),
             installed_versions,
             versions_list_state,
             installed_sites,
             sites_list_state,
-            log_lines: Vec::new(),
+            jobs: Vec::new(),
+            next_job_id: 0,
+            job_tx,
+            job_rx,
             log_scroll: 0,
             should_quit: false,
         }
@@ -145,29 +179,152 @@ impl App {
     // ── Event Loop ───────────────────────────────────────────────────────────
 
     pub async fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
+        // Rust concept: crossterm mouse capture must be explicitly enabled.
+        // Without this, `Event::Mouse` is never emitted. We disable it on
+        // exit so the terminal returns to normal mouse behavior (text select).
+        crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
+
         while !self.should_quit {
+            // Drain all pending job messages before rendering so the UI
+            // shows the latest output. `try_recv` is non-blocking — it
+            // returns immediately if the channel is empty.
+            self.drain_job_messages();
+
             terminal.draw(|frame| self.render(frame))?;
             self.handle_events()?;
         }
+
+        crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)?;
         Ok(())
+    }
+
+    // ── Job Message Drain ────────────────────────────────────────────────────
+    //
+    // Rust concept: `try_recv()` on an `mpsc::UnboundedReceiver` returns
+    // `Ok(msg)` if a message is available, or `Err(TryRecvError::Empty)` if
+    // the channel is empty. We drain in a loop until empty, which keeps the
+    // UI responsive — we never block waiting for messages.
+
+    fn drain_job_messages(&mut self) {
+        while let Ok(msg) = self.job_rx.try_recv() {
+            match msg {
+                JobMessage::Output(job_id, ref line) => {
+                    crate::debug::log(&format!("job[{job_id}] output: {line}"));
+                    if let Some(job) = self.jobs.iter_mut().find(|j| j.id == job_id) {
+                        job.output.push(line.clone());
+                    }
+                    // Reset scroll to bottom when new output arrives.
+                    self.log_scroll = 0;
+                }
+                JobMessage::Finished(job_id, success) => {
+                    crate::debug::log(&format!("job[{job_id}] finished: success={success}"));
+                    if let Some(job) = self.jobs.iter_mut().find(|j| j.id == job_id) {
+                        job.status = if success {
+                            JobStatus::Done
+                        } else {
+                            JobStatus::Failed
+                        };
+                        let status_label = if success { "✓ done" } else { "✗ failed" };
+                        job.output.push(format!("── {status_label} ──"));
+                    }
+                    // Refresh installed versions/sites after any job completes.
+                    self.refresh_installed();
+                }
+            }
+        }
+    }
+
+    /// Re-reads installed versions and sites from omd.
+    fn refresh_installed(&mut self) {
+        self.installed_versions = installer::list_installed_versions().unwrap_or_default();
+        self.installed_sites = installer::list_installed_sites().unwrap_or_default();
+
+        // Keep selection in bounds after refresh.
+        if self.installed_versions.is_empty() {
+            self.versions_list_state.select(None);
+        } else if self
+            .versions_list_state
+            .selected()
+            .is_none_or(|i| i >= self.installed_versions.len())
+        {
+            self.versions_list_state.select(Some(0));
+        }
+        if self.installed_sites.is_empty() {
+            self.sites_list_state.select(None);
+        } else if self
+            .sites_list_state
+            .selected()
+            .is_none_or(|i| i >= self.installed_sites.len())
+        {
+            self.sites_list_state.select(Some(0));
+        }
+    }
+
+    // ── Job Spawning ─────────────────────────────────────────────────────────
+
+    /// Creates a new Job, registers it, and spawns the async install task.
+    fn spawn_install_job(&mut self, config: InstallConfig) {
+        let job_id = self.next_job_id;
+        self.next_job_id += 1;
+
+        let label = format!(
+            "install {} -e {} → {}",
+            config.version, config.edition, config.site_name
+        );
+
+        crate::debug::log(&format!("spawn_install_job: id={job_id} label={label}"));
+
+        self.jobs.push(Job {
+            id: job_id,
+            label,
+            status: JobStatus::Running,
+            output: Vec::new(),
+        });
+
+        // Clone the sender and pass it to the background task.
+        // Rust concept: `mpsc::UnboundedSender` implements `Clone` — each
+        // clone can send independently. The single receiver in App drains all.
+        installer::spawn_install(config, job_id, self.job_tx.clone());
     }
 
     // ── Input ────────────────────────────────────────────────────────────────
 
     fn handle_events(&mut self) -> Result<()> {
         if event::poll(std::time::Duration::from_millis(16))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    self.dispatch(key.code);
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    self.dispatch(key.code, key.modifiers);
                 }
+                Event::Mouse(mouse) => {
+                    if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                        self.handle_mouse_click(mouse.column, mouse.row);
+                    }
+                }
+                _ => {}
             }
         }
         Ok(())
     }
 
-    fn dispatch(&mut self, code: KeyCode) {
+    /// Checks which pane was clicked and switches focus to it.
+    fn handle_mouse_click(&mut self, col: u16, row: u16) {
+        let r = self.pane_rects;
+        if contains(r.version_browser, col, row) {
+            self.active_pane = ActivePane::VersionBrowser;
+        } else if contains(r.installed_versions, col, row) {
+            self.active_pane = ActivePane::InstalledVersions;
+        } else if contains(r.installed_sites, col, row) {
+            self.active_pane = ActivePane::InstalledSites;
+        } else if contains(r.log_panel, col, row) {
+            self.active_pane = ActivePane::LogPanel;
+        }
+    }
+
+    fn dispatch(&mut self, code: KeyCode, modifiers: KeyModifiers) {
+        let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+
         // Global keys that work regardless of pane focus.
-        if matches!(code, KeyCode::Char('q')) {
+        if matches!(code, KeyCode::Char('q')) && !ctrl {
             // In Configure mode, 'q' is a text character — don't quit.
             if !matches!(self.left_mode, LeftPaneMode::Configure { .. })
                 || self.active_pane != ActivePane::VersionBrowser
@@ -177,15 +334,49 @@ impl App {
             }
         }
 
-        // Pane switching: h/l (or ←/→) — but only when not typing text.
-        if !self.is_text_input_active() {
+        // Pane switching: Ctrl+arrows or Alt+h/j/k/l — spatial navigation.
+        //
+        // Ctrl+h/j are unusable — terminals encode Ctrl+h as backspace (0x08)
+        // and Ctrl+j as newline (0x0A), so crossterm never sees them as
+        // Char('h')/Char('j') with CONTROL. Alt doesn't have this problem.
+        let alt = modifiers.contains(KeyModifiers::ALT);
+        if ctrl {
             match code {
-                KeyCode::Char('h') | KeyCode::Left => {
-                    self.focus_prev_pane();
+                KeyCode::Left => {
+                    self.focus_left();
                     return;
                 }
-                KeyCode::Char('l') | KeyCode::Right => {
-                    self.focus_next_pane();
+                KeyCode::Right => {
+                    self.focus_right();
+                    return;
+                }
+                KeyCode::Down => {
+                    self.focus_down();
+                    return;
+                }
+                KeyCode::Up => {
+                    self.focus_up();
+                    return;
+                }
+                _ => {}
+            }
+        }
+        if alt {
+            match code {
+                KeyCode::Char('h') => {
+                    self.focus_left();
+                    return;
+                }
+                KeyCode::Char('l') => {
+                    self.focus_right();
+                    return;
+                }
+                KeyCode::Char('j') => {
+                    self.focus_down();
+                    return;
+                }
+                KeyCode::Char('k') => {
+                    self.focus_up();
                     return;
                 }
                 _ => {}
@@ -193,6 +384,7 @@ impl App {
         }
 
         // Delegate to the focused pane's handler.
+        // Within-pane navigation uses j/k and arrow keys.
         match self.active_pane {
             ActivePane::VersionBrowser => self.on_version_browser(code),
             ActivePane::InstalledVersions => self.on_installed_versions(code),
@@ -201,35 +393,57 @@ impl App {
         }
     }
 
-    /// Returns true when the user is typing into a text field (Configure mode).
-    fn is_text_input_active(&self) -> bool {
-        self.active_pane == ActivePane::VersionBrowser
-            && matches!(self.left_mode, LeftPaneMode::Configure { .. })
-    }
-
     // ── Pane Focus Navigation ────────────────────────────────────────────────
     //
-    // Pane order for h/l cycling:
-    //   VersionBrowser ↔ InstalledVersions ↔ InstalledSites ↔ LogPanel
+    // Spatial pane layout matching the screen:
     //
-    // Rust concept: matching on an enum value and returning the next/prev
-    // variant. This is a simple state machine for focus cycling.
+    //   ┌─────────────┬──────────────────┐
+    //   │ Version     │ Installed        │
+    //   │ Browser     │ Versions         │
+    //   │      →l     │      ↓j          │
+    //   │      ↓j     ├──────────────────┤
+    //   │             │ Installed        │
+    //   │             │ Sites            │
+    //   │         ←h←←│                  │
+    //   ├─────────────┴──────────────────┤
+    //   │ Log Panel                      │
+    //   │      ↑k → VersionBrowser      │
+    //   └────────────────────────────────┘
+    //
+    // h/j/k/l = pane focus (spatial), arrow keys = within-pane navigation.
 
-    fn focus_next_pane(&mut self) {
+    fn focus_right(&mut self) {
         self.active_pane = match self.active_pane {
             ActivePane::VersionBrowser => ActivePane::InstalledVersions,
-            ActivePane::InstalledVersions => ActivePane::InstalledSites,
-            ActivePane::InstalledSites => ActivePane::LogPanel,
-            ActivePane::LogPanel => ActivePane::VersionBrowser,
+            ActivePane::LogPanel => ActivePane::InstalledSites,
+            other => other, // already rightmost
         };
     }
 
-    fn focus_prev_pane(&mut self) {
+    fn focus_left(&mut self) {
+        self.active_pane = match self.active_pane {
+            ActivePane::InstalledVersions => ActivePane::VersionBrowser,
+            ActivePane::InstalledSites => ActivePane::VersionBrowser,
+            ActivePane::LogPanel => ActivePane::VersionBrowser,
+            other => other, // already leftmost
+        };
+    }
+
+    fn focus_down(&mut self) {
         self.active_pane = match self.active_pane {
             ActivePane::VersionBrowser => ActivePane::LogPanel,
-            ActivePane::InstalledVersions => ActivePane::VersionBrowser,
+            ActivePane::InstalledVersions => ActivePane::InstalledSites,
+            ActivePane::InstalledSites => ActivePane::LogPanel,
+            other => other, // already at bottom
+        };
+    }
+
+    fn focus_up(&mut self) {
+        self.active_pane = match self.active_pane {
+            ActivePane::LogPanel => ActivePane::VersionBrowser,
             ActivePane::InstalledSites => ActivePane::InstalledVersions,
-            ActivePane::LogPanel => ActivePane::InstalledSites,
+            ActivePane::InstalledVersions => ActivePane::VersionBrowser,
+            other => other, // already at top
         };
     }
 
@@ -257,6 +471,11 @@ impl App {
             KeyCode::Enter => {
                 if let Some(vi) = self.table_state.selected() {
                     let gi = self.active_tab;
+                    let version = &self.version_groups[gi].versions[vi];
+                    crate::debug::log(&format!(
+                        "on_browse: selected group_idx={gi} version_idx={vi} base={} kind={:?}",
+                        version.base, version.kind
+                    ));
                     let mut list_state = ListState::default();
                     list_state.select(Some(0));
                     self.left_mode = LeftPaneMode::EditionPicker {
@@ -395,19 +614,28 @@ impl App {
             }
             KeyCode::Enter if !site_input.is_empty() => {
                 let version = &self.version_groups[*group_idx].versions[*version_idx];
+
+                crate::debug::log(&format!(
+                    "on_configure: group_idx={} version_idx={} version.base={} version.kind={:?}",
+                    *group_idx, *version_idx, version.base, version.kind
+                ));
+
                 let config = InstallConfig {
                     version: version.install_arg(),
+                    omd_version: version.dir_name(),
                     edition: edition.as_str().to_string(),
                     site_name: site_input.clone(),
                 };
 
-                // TODO (Phase 2): Spawn this as an async job instead of just logging.
-                self.log_lines.push(format!(
-                    "[install] cmk-dev-install {} -e {} && cmk-dev-site ...{} -n {}",
-                    config.version, config.edition, config.edition, config.site_name
+                crate::debug::log(&format!(
+                    "on_configure: InstallConfig {{ version={}, omd_version={}, edition={}, site_name={} }}",
+                    config.version, config.omd_version, config.edition, config.site_name
                 ));
-                self.log_lines
-                    .push("  → queued (async execution in Phase 2)".to_string());
+
+                // Spawn an async install job. The job runs in the background
+                // and sends output lines through the mpsc channel. The UI
+                // drains the channel each frame in `drain_job_messages()`.
+                self.spawn_install_job(config);
 
                 // Return to browse mode so user can start another install.
                 self.left_mode = LeftPaneMode::Browse;
@@ -515,6 +743,14 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
             .split(body[1]);
+
+        // Store pane geometry so mouse clicks can be mapped to panes.
+        self.pane_rects = PaneRects {
+            version_browser: body[0],
+            installed_versions: right[0],
+            installed_sites: right[1],
+            log_panel: outer[2],
+        };
 
         self.render_tabs(frame, outer[0]);
         self.render_left(frame, body[0]);
@@ -834,26 +1070,49 @@ impl App {
     fn render_log_panel(&self, frame: &mut Frame, area: Rect) {
         let is_focused = self.active_pane == ActivePane::LogPanel;
 
-        let lines: Vec<Line> = if self.log_lines.is_empty() {
+        // Flatten all job output into a single line stream with job labels.
+        // Each job's output is prefixed with a header showing its label and status.
+        let lines: Vec<Line> = if self.jobs.is_empty() {
             vec![Line::styled(
                 "  No jobs running. Select a version and press Enter to install.",
                 Style::default().fg(Color::DarkGray),
             )]
         } else {
-            self.log_lines
-                .iter()
-                .map(|l| {
-                    if l.starts_with("[install]") {
-                        Line::styled(l.as_str(), Style::default().fg(Color::Cyan))
-                    } else if l.contains("done") || l.contains("✓") {
-                        Line::styled(l.as_str(), Style::default().fg(Color::Green))
-                    } else if l.contains("error") || l.contains("✗") {
-                        Line::styled(l.as_str(), Style::default().fg(Color::Red))
+            let mut all_lines: Vec<Line> = Vec::new();
+            for job in &self.jobs {
+                // Job header with status indicator.
+                let (status_icon, status_color) = match job.status {
+                    JobStatus::Running => ("⟳", Color::Yellow),
+                    JobStatus::Done => ("✓", Color::Green),
+                    JobStatus::Failed => ("✗", Color::Red),
+                };
+                all_lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("[{status_icon}] "),
+                        Style::default().fg(status_color),
+                    ),
+                    Span::styled(&job.label, Style::default().fg(Color::Cyan)),
+                ]));
+
+                // Job output lines.
+                for line in &job.output {
+                    let style = if line.contains("✓") || line.contains("done") {
+                        Style::default().fg(Color::Green)
+                    } else if line.contains("✗")
+                        || line.contains("error")
+                        || line.contains("Error")
+                        || line.contains("failed")
+                    {
+                        Style::default().fg(Color::Red)
+                    } else if line.starts_with('→') {
+                        Style::default().fg(Color::Cyan)
                     } else {
-                        Line::styled(l.as_str(), Style::default().fg(Color::Gray))
-                    }
-                })
-                .collect()
+                        Style::default().fg(Color::Gray)
+                    };
+                    all_lines.push(Line::styled(format!("  {line}"), style));
+                }
+            }
+            all_lines
         };
 
         // Scroll: show latest lines by default, scroll_offset shifts viewport up.
@@ -863,10 +1122,22 @@ impl App {
         let end = total.saturating_sub(self.log_scroll).min(total);
         let visible: Vec<Line> = lines[start..end].to_vec();
 
+        // Show running job count in the title.
+        let running = self
+            .jobs
+            .iter()
+            .filter(|j| j.status == JobStatus::Running)
+            .count();
+        let title = if running > 0 {
+            format!(" Log ({running} running) ")
+        } else {
+            " Log ".to_string()
+        };
+
         frame.render_widget(
             Paragraph::new(visible).block(
                 Block::default()
-                    .title(" Log ")
+                    .title(title)
                     .borders(Borders::ALL)
                     .border_style(border_style(is_focused)),
             ),
@@ -880,18 +1151,20 @@ impl App {
         let hint = match self.active_pane {
             ActivePane::VersionBrowser => match &self.left_mode {
                 LeftPaneMode::Browse => {
-                    "  j/k row  Tab/ShiftTab version tab  Enter select  h/l pane  q quit"
+                    "  j/k row  Tab/ShiftTab version  Enter select  Alt+hjkl pane  q quit"
                 }
                 LeftPaneMode::EditionPicker { .. } => {
-                    "  j/k edition  Enter confirm  Esc back  h/l pane"
+                    "  j/k edition  Enter confirm  Esc back  Alt+hjkl pane"
                 }
-                LeftPaneMode::Configure { .. } => "  Type site name  Enter install  Esc back",
+                LeftPaneMode::Configure { .. } => {
+                    "  Type site name  Enter install  Esc back  Alt+hjkl pane"
+                }
             },
             ActivePane::InstalledVersions => {
-                "  j/k navigate  d delete  s create site  h/l pane  q quit"
+                "  j/k navigate  d delete  s create site  Alt+hjkl pane  q quit"
             }
-            ActivePane::InstalledSites => "  j/k navigate  d delete site  h/l pane  q quit",
-            ActivePane::LogPanel => "  j/k scroll  h/l pane  q quit",
+            ActivePane::InstalledSites => "  j/k navigate  d delete site  Alt+hjkl pane  q quit",
+            ActivePane::LogPanel => "  j/k scroll  Alt+hjkl pane  q quit",
         };
 
         frame.render_widget(
@@ -918,4 +1191,9 @@ fn border_style(is_focused: bool) -> Style {
     } else {
         Style::default().fg(Color::DarkGray)
     }
+}
+
+/// Hit-test: is the point (col, row) inside the given Rect?
+fn contains(rect: Rect, col: u16, row: u16) -> bool {
+    col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
 }

@@ -84,13 +84,18 @@ impl Version {
     /// Version argument for `cmk-dev-install`.
     /// Daily builds need dots → hyphens in the date part.
     pub fn install_arg(&self) -> String {
-        match &self.kind {
+        let arg = match &self.kind {
             VersionKind::Daily { date } => {
                 format!("{}-{}", self.base, date.replace('.', "-"))
             }
             VersionKind::StablePatch { patch } => format!("{}p{}", self.base, patch),
             VersionKind::Beta { num } => format!("{}b{}", self.base, num),
-        }
+        };
+        crate::debug::log(&format!(
+            "install_arg: base={} kind={:?} → {arg}",
+            self.base, self.kind
+        ));
+        arg
     }
 
     pub fn kind_label(&self) -> &str {
