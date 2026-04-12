@@ -114,9 +114,10 @@ Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`
 
 See the `docs/` Obsidian vault:
 
-- [000 Index](docs/000-index.md) — start here
-- [001 Architecture](docs/001-architecture.md) — design decisions and data flow
-- [002 Nix Setup](docs/002-nix-setup.md) — flake walkthrough
-- [003 Rust Learning](docs/003-rust-learning.md) — Rust concepts encountered
+- [Index / Map of Content](docs/notes/00%20Index.md) — start here
+- [Getting Started](docs/notes/Getting%20Started.md) — new engineer onboarding
+- [Module Boundaries](docs/notes/Module%20Boundaries.md) — architecture and code structure
+- [App State Machine](docs/notes/App%20State%20Machine.md) — key design pattern
+- `docs/notes/` — 40+ atomic notes on architecture, Rust concepts, tools, features
 
 Update the vault whenever a new pattern, decision, or Rust concept appears.

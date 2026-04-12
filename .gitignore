@@ -1,5 +1,6 @@
 /target
 result
 .direnv
+**/.obsidian/workspace.json
 # Cargo.lock is intentionally tracked for binary crates.
 # crane (Nix build) requires it present and not gitignored.
