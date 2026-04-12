@@ -41,6 +41,8 @@ pub struct InstallConfig {
 }
 
 // ── Public Functions ─────────────────────────────────────────────────────────
+//
+// These are used in Phase 3 (install flow) — allow dead_code until then.
 
 /// Step 1 — Download and install a Checkmk package via `cmk-dev-install`.
 ///
@@ -52,6 +54,7 @@ pub struct InstallConfig {
 ///
 /// Rust concept: `Result<()>` — the `()` is the "unit type", Rust's equivalent
 /// of `void`. We only care whether it succeeded, not about a return value.
+#[allow(dead_code)]
 pub fn install_package(config: &InstallConfig) -> Result<()> {
     println!(
         "→ Running: cmk-dev-install {} -e {}",
@@ -64,10 +67,7 @@ pub fn install_package(config: &InstallConfig) -> Result<()> {
         .context("Failed to launch cmk-dev-install — is it in PATH?")?;
 
     if !status.success() {
-        bail!(
-            "cmk-dev-install exited with code {:?}",
-            status.code()
-        );
+        bail!("cmk-dev-install exited with code {:?}", status.code());
     }
 
     Ok(())
@@ -80,6 +80,7 @@ pub fn install_package(config: &InstallConfig) -> Result<()> {
 ///
 /// The omd_version is the base version, e.g. "2.4.0".
 /// cmk-dev-site handles `sudo omd create`, configuration, and site start.
+#[allow(dead_code)]
 pub fn create_site(config: &InstallConfig) -> Result<()> {
     // The first positional arg to cmk-dev-site is the OMD version string:
     // "{base_version}.{edition}" — e.g. "2.4.0.cee"
@@ -102,10 +103,7 @@ pub fn create_site(config: &InstallConfig) -> Result<()> {
         .context("Failed to launch cmk-dev-site — is it in PATH?")?;
 
     if !status.success() {
-        bail!(
-            "cmk-dev-site exited with code {:?}",
-            status.code()
-        );
+        bail!("cmk-dev-site exited with code {:?}", status.code());
     }
 
     Ok(())
@@ -115,6 +113,7 @@ pub fn create_site(config: &InstallConfig) -> Result<()> {
 ///
 /// Uses `cmk-dev-install-site` if available, otherwise falls back to
 /// running `install_package` then `create_site` in sequence.
+#[allow(dead_code)]
 pub fn install_and_create_site(config: &InstallConfig) -> Result<()> {
     // Try the combined tool first (it's the most ergonomic and prints a
     // preview of both commands before executing them).
@@ -136,10 +135,7 @@ pub fn install_and_create_site(config: &InstallConfig) -> Result<()> {
             .context("Failed to launch cmk-dev-install-site")?;
 
         if !status.success() {
-            bail!(
-                "cmk-dev-install-site exited with code {:?}",
-                status.code()
-            );
+            bail!("cmk-dev-install-site exited with code {:?}", status.code());
         }
     } else {
         // Fall back: run the two steps manually.
@@ -167,8 +163,7 @@ pub fn list_installed_versions() -> Result<Vec<String>> {
 
     // Rust concept: converting bytes → String can fail (invalid UTF-8),
     // so `from_utf8` returns a Result. We map the error with `?`.
-    let stdout = std::str::from_utf8(&output.stdout)
-        .context("omd output is not valid UTF-8")?;
+    let stdout = std::str::from_utf8(&output.stdout).context("omd output is not valid UTF-8")?;
 
     let versions = stdout
         .lines()
@@ -214,8 +209,8 @@ pub fn list_installed_sites() -> Result<Vec<InstalledSite>> {
         bail!("omd sites exited with status {:?}", output.status.code());
     }
 
-    let stdout = std::str::from_utf8(&output.stdout)
-        .context("omd sites output is not valid UTF-8")?;
+    let stdout =
+        std::str::from_utf8(&output.stdout).context("omd sites output is not valid UTF-8")?;
 
     let sites = stdout
         .lines()
@@ -243,6 +238,7 @@ pub fn list_installed_sites() -> Result<Vec<InstalledSite>> {
 // ── Helper ───────────────────────────────────────────────────────────────────
 
 /// Returns true if `name` can be found on PATH.
+#[allow(dead_code)]
 fn which_exists(name: &str) -> bool {
     Command::new("which")
         .arg(name)

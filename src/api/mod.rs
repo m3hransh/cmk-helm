@@ -46,20 +46,18 @@ static ROW_RE: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
-static DAILY_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(\d+\.\d+\.\d+)-(\d{4}\.\d{2}\.\d{2})$").unwrap()
-});
+static DAILY_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(\d+\.\d+\.\d+)-(\d{4}\.\d{2}\.\d{2})$").unwrap());
 static STABLE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\d+\.\d+\.\d+)p(\d+)$").unwrap());
-static BETA_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(\d+\.\d+\.\d+)b(\d+)$").unwrap());
+static BETA_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d+\.\d+\.\d+)b(\d+)$").unwrap());
 
 // ── Data Types ────────────────────────────────────────────────────────────────
 
 /// A single version entry from the root directory listing.
 #[derive(Debug, Clone)]
 pub struct Version {
-    pub base: String,      // "2.5.0"
+    pub base: String, // "2.5.0"
     pub kind: VersionKind,
     /// Server modification time — "2026-04-03 13:50"
     pub timestamp: String,
@@ -74,6 +72,7 @@ pub enum VersionKind {
 
 impl Version {
     /// Version directory name on the server.
+    #[allow(dead_code)]
     pub fn dir_name(&self) -> String {
         match &self.kind {
             VersionKind::Daily { date } => format!("{}-{}", self.base, date),
@@ -106,8 +105,8 @@ impl Version {
     pub fn detail(&self) -> String {
         match &self.kind {
             VersionKind::Daily { date } => date.clone(),
-            VersionKind::StablePatch { patch } => format!("p{}", patch),
-            VersionKind::Beta { num } => format!("b{}", num),
+            VersionKind::StablePatch { patch } => format!("p{patch}"),
+            VersionKind::Beta { num } => format!("b{num}"),
         }
     }
 
@@ -120,7 +119,12 @@ impl Version {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
         if minor >= 5 {
-            &[Edition::Community, Edition::Pro, Edition::Ultimate, Edition::Ultimatemt]
+            &[
+                Edition::Community,
+                Edition::Pro,
+                Edition::Ultimate,
+                Edition::Ultimatemt,
+            ]
         } else {
             &[Edition::Cee, Edition::Cre, Edition::Cloud, Edition::Cme]
         }
@@ -149,7 +153,10 @@ pub fn group_by_base(versions: Vec<Version>) -> Vec<VersionGroup> {
     for v in versions {
         match groups.iter_mut().find(|g| g.base == v.base) {
             Some(g) => g.versions.push(v),
-            None => groups.push(VersionGroup { base: v.base.clone(), versions: vec![v] }),
+            None => groups.push(VersionGroup {
+                base: v.base.clone(),
+                versions: vec![v],
+            }),
         }
     }
 
@@ -187,27 +194,27 @@ pub enum Edition {
 impl Edition {
     pub fn as_str(&self) -> &str {
         match self {
-            Self::Community  => "community",
-            Self::Pro        => "pro",
-            Self::Ultimate   => "ultimate",
+            Self::Community => "community",
+            Self::Pro => "pro",
+            Self::Ultimate => "ultimate",
             Self::Ultimatemt => "ultimatemt",
-            Self::Cee        => "cee",
-            Self::Cre        => "cre",
-            Self::Cloud      => "cloud",
-            Self::Cme        => "cme",
+            Self::Cee => "cee",
+            Self::Cre => "cre",
+            Self::Cloud => "cloud",
+            Self::Cme => "cme",
         }
     }
 
     pub fn display_name(&self) -> &str {
         match self {
-            Self::Community  => "Community (free)",
-            Self::Pro        => "Pro",
-            Self::Ultimate   => "Ultimate",
+            Self::Community => "Community (free)",
+            Self::Pro => "Pro",
+            Self::Ultimate => "Ultimate",
             Self::Ultimatemt => "Ultimate Multitenant",
-            Self::Cee        => "Enterprise (cee)",
-            Self::Cre        => "Community Raw (cre)",
-            Self::Cloud      => "Cloud (cce)",
-            Self::Cme        => "Managed Services (cme)",
+            Self::Cee => "Enterprise (cee)",
+            Self::Cre => "Community Raw (cre)",
+            Self::Cloud => "Cloud (cce)",
+            Self::Cme => "Managed Services (cme)",
         }
     }
 }
@@ -219,7 +226,10 @@ pub fn read_credentials() -> Result<(String, String)> {
     let contents = std::fs::read_to_string(&path)
         .with_context(|| format!("Cannot read credentials from {}", path.display()))?;
     let (user, pass) = contents.trim().split_once(':').with_context(|| {
-        format!("Credentials file {} must be `username:password`", path.display())
+        format!(
+            "Credentials file {} must be `username:password`",
+            path.display()
+        )
     })?;
     Ok((user.to_string(), pass.to_string()))
 }
@@ -230,7 +240,9 @@ fn parse_version_from_str(s: &str, timestamp: String) -> Option<Version> {
     if let Some(cap) = DAILY_RE.captures(s) {
         return Some(Version {
             base: cap[1].to_string(),
-            kind: VersionKind::Daily { date: cap[2].to_string() },
+            kind: VersionKind::Daily {
+                date: cap[2].to_string(),
+            },
             timestamp,
         });
     }
@@ -302,9 +314,7 @@ mod tests {
     use super::*;
 
     fn make_row(href: &str, ts: &str) -> String {
-        format!(
-            r#"<a href="{href}/">{href}/</a></td><td align="right">{ts}  </td>"#
-        )
+        format!(r#"<a href="{href}/">{href}/</a></td><td align="right">{ts}  </td>"#)
     }
 
     #[test]
@@ -323,7 +333,10 @@ mod tests {
         let versions = parse_versions_from_html(&html);
         assert_eq!(versions.len(), 1);
         assert_eq!(versions[0].timestamp, "2026-03-16 10:49");
-        assert!(matches!(&versions[0].kind, VersionKind::StablePatch { patch: 24 }));
+        assert!(matches!(
+            &versions[0].kind,
+            VersionKind::StablePatch { patch: 24 }
+        ));
     }
 
     #[test]
@@ -345,7 +358,9 @@ mod tests {
     fn install_arg_daily_uses_hyphens() {
         let v = Version {
             base: "2.5.0".into(),
-            kind: VersionKind::Daily { date: "2026.04.03".into() },
+            kind: VersionKind::Daily {
+                date: "2026.04.03".into(),
+            },
             timestamp: "".into(),
         };
         assert_eq!(v.install_arg(), "2.5.0-2026-04-03");
@@ -364,9 +379,21 @@ mod tests {
     #[test]
     fn group_by_base_sorts_newest_first() {
         let versions = vec![
-            Version { base: "2.4.0".into(), kind: VersionKind::StablePatch { patch: 1 }, timestamp: "".into() },
-            Version { base: "2.6.0".into(), kind: VersionKind::Daily { date: "x".into() }, timestamp: "".into() },
-            Version { base: "2.5.0".into(), kind: VersionKind::Beta { num: 1 }, timestamp: "".into() },
+            Version {
+                base: "2.4.0".into(),
+                kind: VersionKind::StablePatch { patch: 1 },
+                timestamp: "".into(),
+            },
+            Version {
+                base: "2.6.0".into(),
+                kind: VersionKind::Daily { date: "x".into() },
+                timestamp: "".into(),
+            },
+            Version {
+                base: "2.5.0".into(),
+                kind: VersionKind::Beta { num: 1 },
+                timestamp: "".into(),
+            },
         ];
         let groups = group_by_base(versions);
         assert_eq!(groups[0].base, "2.6.0");
@@ -376,8 +403,16 @@ mod tests {
 
     #[test]
     fn available_editions_splits_on_minor_version() {
-        let v25 = Version { base: "2.5.0".into(), kind: VersionKind::Daily { date: "x".into() }, timestamp: "".into() };
-        let v24 = Version { base: "2.4.0".into(), kind: VersionKind::StablePatch { patch: 1 }, timestamp: "".into() };
+        let v25 = Version {
+            base: "2.5.0".into(),
+            kind: VersionKind::Daily { date: "x".into() },
+            timestamp: "".into(),
+        };
+        let v24 = Version {
+            base: "2.4.0".into(),
+            kind: VersionKind::StablePatch { patch: 1 },
+            timestamp: "".into(),
+        };
         assert!(v25.available_editions().contains(&Edition::Pro));
         assert!(v24.available_editions().contains(&Edition::Cee));
         assert!(!v25.available_editions().contains(&Edition::Cee));
@@ -390,7 +425,9 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires ~/.cmk-credentials and network access"]
     async fn fetch_versions_live() {
-        let groups = fetch_versions(CMK_DOWNLOAD_URL).await.expect("fetch failed");
+        let groups = fetch_versions(CMK_DOWNLOAD_URL)
+            .await
+            .expect("fetch failed");
 
         assert!(!groups.is_empty());
 
@@ -402,16 +439,26 @@ mod tests {
         for g in &groups {
             for v in &g.versions {
                 assert!(!v.timestamp.is_empty(), "timestamp must not be empty");
-                assert!(v.timestamp.contains('-'), "timestamp must be YYYY-MM-DD ...");
+                assert!(
+                    v.timestamp.contains('-'),
+                    "timestamp must be YYYY-MM-DD ..."
+                );
                 if let VersionKind::Daily { .. } = &v.kind {
-                    assert!(!v.install_arg().contains('.') || v.install_arg().starts_with(&v.base),
-                        "daily install_arg date part must use hyphens: {}", v.install_arg());
+                    assert!(
+                        !v.install_arg().contains('.') || v.install_arg().starts_with(&v.base),
+                        "daily install_arg date part must use hyphens: {}",
+                        v.install_arg()
+                    );
                 }
             }
-            println!("  {} ({} entries, newest: {})",
+            println!(
+                "  {} ({} entries, newest: {})",
                 g.base,
                 g.versions.len(),
-                g.versions.first().map(|v| format!("{} @ {}", v.detail(), v.timestamp)).unwrap_or_default()
+                g.versions
+                    .first()
+                    .map(|v| format!("{} @ {}", v.detail(), v.timestamp))
+                    .unwrap_or_default()
             );
         }
     }
