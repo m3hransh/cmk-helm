@@ -4,6 +4,18 @@ All notable changes to CMK Helm are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Chores
+
+- Add git-cliff changelog setup and initial CHANGELOG.md
+
+
+### Features
+
+- Show version in tab bar title and splash screen
+
+
 ## [0.1.0] — 2026-05-20
 
 ### Bug Fixes
