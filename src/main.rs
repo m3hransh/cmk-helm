@@ -5,43 +5,40 @@ mod ui;
 
 use anyhow::{Context, Result};
 use api::CMK_DOWNLOAD_URL;
+use tokio::sync::oneshot;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     debug::init();
     debug::log("cmk-helm starting");
 
-    // Fetch everything before entering raw mode so any error prints cleanly.
-
-    let version_groups = api::fetch_versions(CMK_DOWNLOAD_URL)
-        .await
-        .context("Failed to fetch version list from server")?;
-
-    debug::log(&format!("fetched {} version groups", version_groups.len()));
-    for g in &version_groups {
-        debug::log(&format!("  tab {}: {} versions", g.base, g.versions.len()));
-    }
-
-    // `omd` may not be available in all environments — treat absence as empty lists.
-    // Rust concept: `.unwrap_or_default()` on a Result<Vec<_>> gives an empty Vec
-    // instead of propagating the error, so a missing `omd` binary is non-fatal.
-    let installed_versions = installer::list_installed_versions().unwrap_or_default();
-    let installed_sites = installer::list_installed_sites().unwrap_or_default();
-
-    // Cache sudo credentials before entering raw mode. Install/delete
-    // operations need root, and sudo can't prompt for a password once
-    // the TUI owns the terminal. `sudo -v` validates and caches the
-    // credential; if it's already cached this is a no-op.
-    //
-    // Rust concept: `status()` blocks until the child exits and returns
-    // the exit code. We do this before `ratatui::init()` so the password
-    // prompt appears in the normal terminal.
+    // sudo prompt must happen before ratatui::init() takes over the terminal,
+    // because raw mode would hide sudo's password prompt.
     installer::ensure_sudo();
 
-    let terminal = ratatui::init();
-    let result = ui::App::new(version_groups, installed_versions, installed_sites)
-        .run(terminal)
+    // Spawn the HTTP fetch as a background task so the TUI can display the
+    // animated splash screen immediately while waiting for the network.
+    //
+    // Rust concept: `oneshot::channel` creates a single-use send/receive pair.
+    // The sender is moved into the async task; the receiver is handed to the
+    // App and polled each frame with `try_recv()` until the data arrives.
+    let (tx, rx) = oneshot::channel::<Result<ui::LoadResult>>();
+    tokio::spawn(async move {
+        let result = async {
+            let version_groups = api::fetch_versions(CMK_DOWNLOAD_URL)
+                .await
+                .context("Failed to fetch version list from server")?;
+            debug::log(&format!("fetched {} version groups", version_groups.len()));
+            let installed_versions = installer::list_installed_versions().unwrap_or_default();
+            let installed_sites = installer::list_installed_sites().unwrap_or_default();
+            Ok(ui::LoadResult { version_groups, installed_versions, installed_sites })
+        }
         .await;
+        let _ = tx.send(result);
+    });
+
+    let terminal = ratatui::init();
+    let result = ui::App::new_loading(rx).run(terminal).await;
     ratatui::restore();
 
     result

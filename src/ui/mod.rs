@@ -30,17 +30,31 @@ use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table, TableState, Tabs},
     DefaultTerminal, Frame,
 };
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::api::{Edition, VersionGroup, VersionKind};
 use crate::installer::{self, InstallConfig, InstalledSite, Job, JobId, JobMessage, JobStatus};
+
+// ── Brand colours ────────────────────────────────────────────────────────────
+const CMK_BLUE: Color = Color::Rgb(0, 115, 197);
+const CMK_GREEN: Color = Color::Rgb(144, 238, 144);
+
+// ── Startup data bundle ──────────────────────────────────────────────────────
+//
+// Rust concept: grouping return values in a struct avoids a large tuple and
+// lets the oneshot channel carry a single typed payload.
+pub struct LoadResult {
+    pub version_groups: Vec<VersionGroup>,
+    pub installed_versions: Vec<String>,
+    pub installed_sites: Vec<InstalledSite>,
+}
 
 // ── Pane Focus ───────────────────────────────────────────────────────────────
 //
@@ -166,44 +180,61 @@ pub struct App {
     /// Scroll offset for the log panel (0 = show latest at bottom).
     log_scroll: usize,
 
+    // ── Splash screen ────────────────────────────────────────────────────────
+    //
+    // Rust concept: `Option<oneshot::Receiver<...>>` doubles as both the
+    // "are we loading?" flag and the data source.  When `Some`, we show the
+    // animated splash; when `None`, we show the main UI.  `try_recv()` is
+    // non-blocking — it returns immediately if no data has arrived yet.
+    splash_tick: u8,
+    load_rx: Option<oneshot::Receiver<Result<LoadResult>>>,
+
     should_quit: bool,
 }
 
 impl App {
+    /// Called from main after data is already loaded (used in tests / direct launch).
     pub fn new(
         version_groups: Vec<VersionGroup>,
         installed_versions: Vec<String>,
         installed_sites: Vec<InstalledSite>,
     ) -> Self {
-        // Initialise list states with first item selected if lists aren't empty.
-        let mut versions_list_state = ListState::default();
-        if !installed_versions.is_empty() {
-            versions_list_state.select(Some(0));
-        }
-        let mut sites_list_state = ListState::default();
-        if !installed_sites.is_empty() {
-            sites_list_state.select(Some(0));
-        }
+        let mut app = Self::new_loading_inner();
+        app.load_rx = None;
+        app.version_groups = version_groups;
+        app.installed_versions = installed_versions;
+        app.installed_sites = installed_sites;
+        app
+    }
 
+    /// Called from main — shows the animated splash until the oneshot fires.
+    pub fn new_loading(rx: oneshot::Receiver<Result<LoadResult>>) -> Self {
+        let mut app = Self::new_loading_inner();
+        app.load_rx = Some(rx);
+        app
+    }
+
+    fn new_loading_inner() -> Self {
         let (job_tx, job_rx) = mpsc::unbounded_channel();
-
         Self {
-            version_groups,
+            version_groups: Vec::new(),
             active_tab: 0,
             table_state: TableState::default().with_selected(0),
             active_pane: ActivePane::VersionBrowser,
             left_mode: LeftPaneMode::Browse,
             right_mode: RightPaneMode::Browse,
             pane_rects: PaneRects::default(),
-            installed_versions,
-            versions_list_state,
-            installed_sites,
-            sites_list_state,
+            installed_versions: Vec::new(),
+            versions_list_state: ListState::default(),
+            installed_sites: Vec::new(),
+            sites_list_state: ListState::default(),
             jobs: Vec::new(),
             next_job_id: 0,
             job_tx,
             job_rx,
             log_scroll: 0,
+            splash_tick: 0,
+            load_rx: None,
             should_quit: false,
         }
     }
@@ -217,17 +248,58 @@ impl App {
         crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
 
         while !self.should_quit {
-            // Drain all pending job messages before rendering so the UI
-            // shows the latest output. `try_recv` is non-blocking — it
-            // returns immediately if the channel is empty.
-            self.drain_job_messages();
+            // If still loading, check whether the background fetch finished.
+            self.poll_load_result();
 
+            self.drain_job_messages();
             terminal.draw(|frame| self.render(frame))?;
             self.handle_events()?;
+
+            // Advance the splash animation every frame (poll timeout = 16 ms).
+            self.splash_tick = self.splash_tick.wrapping_add(1);
         }
 
         crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)?;
         Ok(())
+    }
+
+    // ── Splash / Load Polling ────────────────────────────────────────────────
+    //
+    // Rust concept: `oneshot::Receiver::try_recv()` returns
+    //   Ok(value)           – sender sent something
+    //   Err(TryRecvError)   – not yet / sender dropped
+    // We match only the Ok arm; the error arm silently loops until data arrives.
+
+    fn poll_load_result(&mut self) {
+        // `take()` moves the receiver out of the Option so we can match on it
+        // without keeping a borrow on `self.load_rx` while also writing to
+        // other fields — a common Rust borrow-checker trick.
+        if let Some(mut rx) = self.load_rx.take() {
+            match rx.try_recv() {
+                Ok(Ok(data)) => {
+                    self.version_groups = data.version_groups;
+                    self.installed_versions = data.installed_versions;
+                    self.installed_sites = data.installed_sites;
+                    // Initialise list selection now that we have data.
+                    if !self.installed_versions.is_empty() {
+                        self.versions_list_state.select(Some(0));
+                    }
+                    if !self.installed_sites.is_empty() {
+                        self.sites_list_state.select(Some(0));
+                    }
+                    // load_rx stays None → main UI takes over
+                }
+                Ok(Err(e)) => {
+                    // Fetch failed — log it and quit cleanly.
+                    crate::debug::log(&format!("load error: {e}"));
+                    self.should_quit = true;
+                }
+                Err(_) => {
+                    // Not ready yet — put the receiver back.
+                    self.load_rx = Some(rx);
+                }
+            }
+        }
     }
 
     // ── Job Message Drain ────────────────────────────────────────────────────
@@ -878,6 +950,10 @@ impl App {
     // ── Rendering ────────────────────────────────────────────────────────────
 
     fn render(&mut self, frame: &mut Frame) {
+        if self.load_rx.is_some() {
+            self.render_splash(frame);
+            return;
+        }
         let area = frame.area();
 
         // Outer layout: tab bar / body / log panel / footer
@@ -920,6 +996,75 @@ impl App {
         self.render_installed_sites(frame, right[1]);
         self.render_log_panel(frame, outer[2]);
         self.render_footer(frame, outer[3]);
+    }
+
+    // ── Splash screen ────────────────────────────────────────────────────────
+    //
+    // A simple face that blinks and winks while the version list loads.
+    //
+    // Face cycle (using splash_tick % 128):
+    //   0–99   →  (•‿•)  normal
+    //  100–103 →  (-‿-)  blink
+    //  104–119 →  (•‿•)  normal
+    //  120–123 →  (^‿^)  wink
+    //  124–127 →  (•‿•)  normal, then loop
+
+    fn render_splash(&self, frame: &mut Frame) {
+        let area = frame.area();
+
+        let face = match self.splash_tick % 64 {
+            60..=63 => "(-‿-)",
+            _       => "(•‿•)",
+        };
+
+        const SPINNER: [&str; 10] = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+        let spinner = SPINNER[(self.splash_tick as usize / 2) % 10];
+
+        // 9 rows: brand + 2 gaps + face + 2 gaps + name + gap + spinner
+        let content_h: u16 = 9;
+        let start_y = area.y + area.height.saturating_sub(content_h) / 2;
+        let row = |offset: u16| Rect::new(area.x, start_y + offset, area.width, 1);
+
+        // Row 0 — ✓ Checkmk
+        frame.render_widget(
+            Paragraph::new(Line::from(
+                Span::styled("✓ Checkmk", Style::default().fg(CMK_GREEN).add_modifier(Modifier::BOLD)),
+            )).alignment(Alignment::Center),
+            row(0),
+        );
+
+        // Row 2 — animated face
+        frame.render_widget(
+            Paragraph::new(Line::from(
+                Span::styled(face, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            )).alignment(Alignment::Center),
+            row(2),
+        );
+
+        // Row 5 — CMK Helm
+        frame.render_widget(
+            Paragraph::new(Line::from(
+                Span::styled("CMK Helm", Style::default().fg(CMK_BLUE).add_modifier(Modifier::BOLD)),
+            )).alignment(Alignment::Center),
+            row(5),
+        );
+
+        // Row 7 — subtitle
+        frame.render_widget(
+            Paragraph::new(Line::from(
+                Span::styled("Version Browser & Installer", Style::default().fg(Color::DarkGray)),
+            )).alignment(Alignment::Center),
+            row(7),
+        );
+
+        // Row 8 — spinner + loading text
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(spinner, Style::default().fg(CMK_GREEN)),
+                Span::styled(" Fetching versions…", Style::default().fg(Color::DarkGray)),
+            ])).alignment(Alignment::Center),
+            row(8),
+        );
     }
 
     // ── Tab bar ──────────────────────────────────────────────────────────────
