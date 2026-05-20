@@ -527,28 +527,76 @@ impl App {
     fn render_log_panel(&self, frame: &mut Frame, area: Rect) {
         let is_focused = self.active_pane == ActivePane::LogPanel;
 
-        let lines: Vec<Line> = if self.jobs.is_empty() {
-            vec![Line::styled(
-                "  No jobs running. Select a version and press Enter to install.",
-                Style::default().fg(Color::DarkGray),
-            )]
+        let title = if self.copy_mode {
+            " Log [COPY MODE — Esc to exit] "
         } else {
-            let mut all_lines: Vec<Line> = Vec::new();
-            for job in &self.jobs {
-                let (status_icon, status_color) = match job.status {
+            " Log "
+        };
+
+        // Draw the outer border first, then work inside it.
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(border_style(is_focused));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        if self.jobs.is_empty() {
+            frame.render_widget(
+                Paragraph::new(
+                    "  No jobs yet. Select a version and press Enter to install.",
+                )
+                .style(Style::default().fg(Color::DarkGray)),
+                inner,
+            );
+            return;
+        }
+
+        // Split inner area: one-line tab bar on top, log content below.
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .split(inner);
+        let (tab_area, content_area) = (chunks[0], chunks[1]);
+
+        // ── Tab bar ──────────────────────────────────────────────────────────
+        let tab_spans: Vec<Span> = self
+            .jobs
+            .iter()
+            .enumerate()
+            .map(|(i, job)| {
+                let (icon, icon_color) = match job.status {
                     JobStatus::Running => ("⟳", Color::Yellow),
                     JobStatus::Done => ("✓", Color::Green),
                     JobStatus::Failed => ("✗", Color::Red),
                 };
-                all_lines.push(Line::from(vec![
+                let text = format!(" {icon} {} ", job.short_label);
+                if self.selected_job == Some(i) {
                     Span::styled(
-                        format!("[{status_icon}] "),
-                        Style::default().fg(status_color),
-                    ),
-                    Span::styled(&job.label, Style::default().fg(Color::Cyan)),
-                ]));
+                        text,
+                        Style::default()
+                            .bg(CMK_BLUE)
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                } else {
+                    Span::styled(text, Style::default().fg(icon_color))
+                }
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(Line::from(tab_spans)), tab_area);
 
-                for line in &job.output {
+        // ── Log content for the selected job ─────────────────────────────────
+        let lines: Vec<Line> = self
+            .selected_job
+            .and_then(|idx| self.jobs.get(idx))
+            .map(|job| {
+                // First line: full job description as a dim header.
+                let mut out = vec![Line::styled(
+                    format!("  {}", job.label),
+                    Style::default().fg(Color::DarkGray),
+                )];
+                out.extend(job.output.iter().map(|line| {
                     let style = if line.contains("✓") || line.contains("done") {
                         Style::default().fg(Color::Green)
                     } else if line.contains("✗")
@@ -562,39 +610,21 @@ impl App {
                     } else {
                         Style::default().fg(Color::Gray)
                     };
-                    all_lines.push(Line::styled(format!("  {line}"), style));
-                }
-            }
-            all_lines
-        };
+                    Line::styled(format!("  {line}"), style)
+                }));
+                out
+            })
+            .unwrap_or_default();
 
-        // Scroll: show latest lines by default, scroll_offset shifts viewport up.
-        let visible_height = area.height.saturating_sub(2) as usize; // minus borders
+        // Scroll: show the latest lines by default; log_scroll shifts the
+        // viewport up so the user can read earlier output.
+        let visible_height = content_area.height as usize;
         let total = lines.len();
         let start = total.saturating_sub(visible_height + self.log_scroll);
         let end = total.saturating_sub(self.log_scroll).min(total);
         let visible: Vec<Line> = lines[start..end].to_vec();
 
-        let running = self
-            .jobs
-            .iter()
-            .filter(|j| j.status == JobStatus::Running)
-            .count();
-        let title = if running > 0 {
-            format!(" Log ({running} running) ")
-        } else {
-            " Log ".to_string()
-        };
-
-        frame.render_widget(
-            Paragraph::new(visible).block(
-                Block::default()
-                    .title(title)
-                    .borders(Borders::ALL)
-                    .border_style(border_style(is_focused)),
-            ),
-            area,
-        );
+        frame.render_widget(Paragraph::new(visible), content_area);
     }
 
     // ── Footer ────────────────────────────────────────────────────────────────
@@ -625,7 +655,13 @@ impl App {
                 RightPaneMode::ConfirmDelete { .. } => "  y confirm  n/Esc cancel",
                 _ => "  j/k navigate  d delete site  Alt+hjkl pane  q quit",
             },
-            ActivePane::LogPanel => "  j/k scroll  Alt+hjkl pane  q quit",
+            ActivePane::LogPanel => {
+                if self.copy_mode {
+                    "  j/k scroll  h/l tabs  Esc exit copy mode"
+                } else {
+                    "  j/k scroll  h/l tabs  c copy mode  Alt+hjkl pane  q quit"
+                }
+            }
         };
 
         frame.render_widget(

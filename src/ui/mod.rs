@@ -85,6 +85,11 @@ pub struct App {
 
     // ── Log panel ─────────────────────────────────────────────────────────────
     log_scroll: usize,
+    /// Which job tab is currently shown. None only when jobs is empty.
+    selected_job: Option<usize>,
+    /// When true, mouse capture is disabled so the terminal can handle text
+    /// selection for copy-paste. Esc exits this mode.
+    copy_mode: bool,
 
     // ── Splash screen ─────────────────────────────────────────────────────────
     //
@@ -148,6 +153,8 @@ impl App {
             job_tx,
             job_rx,
             log_scroll: 0,
+            selected_job: None,
+            copy_mode: false,
             splash_tick: 0,
             load_rx: None,
             refresh_rx: None,
@@ -370,15 +377,22 @@ impl App {
             "install {} -e {} → {}",
             config.version, config.edition, config.site_name
         );
+        // Short tab title: base version only (drop the date/patch suffix).
+        // omd_version is e.g. "2.6.0-2026.04.07" or "2.4.0p24".
+        let base = config.omd_version.split('-').next().unwrap_or(&config.omd_version);
+        let short_label = format!("install {base}");
 
         crate::debug::log(&format!("spawn_install_job: id={job_id} label={label}"));
 
         self.jobs.push(Job {
             id: job_id,
             label,
+            short_label,
             status: JobStatus::Running,
             output: Vec::new(),
         });
+        self.selected_job = Some(self.jobs.len() - 1);
+        self.log_scroll = 0;
 
         // Rust concept: `mpsc::UnboundedSender` implements `Clone` — each
         // clone can send independently. The single receiver in App drains all.

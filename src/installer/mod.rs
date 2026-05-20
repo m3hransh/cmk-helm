@@ -282,7 +282,10 @@ pub enum JobStatus {
 #[derive(Debug, Clone)]
 pub struct Job {
     pub id: JobId,
+    /// Full label shown in the log header line.
     pub label: String,
+    /// Short label shown in the tab bar (≤ ~18 chars).
+    pub short_label: String,
     pub status: JobStatus,
     pub output: Vec<String>,
 }

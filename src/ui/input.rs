@@ -486,14 +486,20 @@ impl App {
                         let job_id = self.next_job_id;
                         self.next_job_id += 1;
                         let label = format!("delete version {version}");
+                        let base = version.split('-').next().unwrap_or(version.as_str());
+                        let short_label = format!("rm {base}");
+                        let version_owned = version.clone();
                         self.jobs.push(installer::Job {
                             id: job_id,
                             label,
+                            short_label,
                             status: installer::JobStatus::Running,
                             output: Vec::new(),
                         });
+                        self.selected_job = Some(self.jobs.len() - 1);
+                        self.log_scroll = 0;
                         installer::spawn_delete_version(
-                            version.clone(),
+                            version_owned,
                             job_id,
                             self.job_tx.clone(),
                         );
@@ -502,13 +508,18 @@ impl App {
                         let job_id = self.next_job_id;
                         self.next_job_id += 1;
                         let label = format!("delete site {name}");
+                        let short_label = format!("rm {name}");
+                        let name_owned = name.clone();
                         self.jobs.push(installer::Job {
                             id: job_id,
                             label,
+                            short_label,
                             status: installer::JobStatus::Running,
                             output: Vec::new(),
                         });
-                        installer::spawn_delete_site(name.clone(), job_id, self.job_tx.clone());
+                        self.selected_job = Some(self.jobs.len() - 1);
+                        self.log_scroll = 0;
+                        installer::spawn_delete_site(name_owned, job_id, self.job_tx.clone());
                     }
                 }
                 self.right_mode = RightPaneMode::Browse;
@@ -541,14 +552,18 @@ impl App {
                 let job_id = self.next_job_id;
                 self.next_job_id += 1;
                 let label = format!("create site from {omd_version}");
+                let short_label = format!("site {site_input}");
                 let omd_ver = omd_version.clone();
                 let site = site_input.clone();
                 self.jobs.push(installer::Job {
                     id: job_id,
                     label,
+                    short_label,
                     status: installer::JobStatus::Running,
                     output: Vec::new(),
                 });
+                self.selected_job = Some(self.jobs.len() - 1);
+                self.log_scroll = 0;
                 installer::spawn_create_site(omd_ver, site, job_id, self.job_tx.clone());
                 self.right_mode = RightPaneMode::Browse;
             }
@@ -559,6 +574,20 @@ impl App {
     // ── Log Panel Input ───────────────────────────────────────────────────────
 
     fn on_log_panel(&mut self, code: KeyCode) {
+        // In copy mode only Esc exits — mouse capture is already disabled so
+        // the terminal can handle mouse for text selection. All other keys are
+        // passed through (j/k scrolling still works).
+        if self.copy_mode {
+            if code == KeyCode::Esc {
+                self.copy_mode = false;
+                let _ = crossterm::execute!(
+                    std::io::stdout(),
+                    crossterm::event::EnableMouseCapture
+                );
+            }
+            // Don't return — still allow scrolling / tab switching below.
+        }
+
         match code {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.log_scroll = self.log_scroll.saturating_add(1);
@@ -566,7 +595,34 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => {
                 self.log_scroll = self.log_scroll.saturating_sub(1);
             }
-            KeyCode::Esc => self.should_quit = true,
+            // h/l — switch between job tabs (bare h/l; Alt+h/l handled by dispatch).
+            KeyCode::Left | KeyCode::Char('h') => {
+                if let Some(idx) = self.selected_job {
+                    if idx > 0 {
+                        self.selected_job = Some(idx - 1);
+                        self.log_scroll = 0;
+                    }
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if let Some(idx) = self.selected_job {
+                    let max = self.jobs.len().saturating_sub(1);
+                    if idx < max {
+                        self.selected_job = Some(idx + 1);
+                        self.log_scroll = 0;
+                    }
+                }
+            }
+            // c — enter copy mode: disable mouse capture so the terminal can
+            // handle mouse events for text selection.
+            KeyCode::Char('c') if !self.copy_mode => {
+                self.copy_mode = true;
+                let _ = crossterm::execute!(
+                    std::io::stdout(),
+                    crossterm::event::DisableMouseCapture
+                );
+            }
+            KeyCode::Esc if !self.copy_mode => self.should_quit = true,
             _ => {}
         }
     }
