@@ -633,27 +633,27 @@ impl App {
         let hint = match self.active_pane {
             ActivePane::VersionBrowser => match &self.left_mode {
                 LeftPaneMode::Browse => {
-                    "  j/k row  Tab/ShiftTab version  Enter select  r refresh  Alt+hjkl pane  q quit"
+                    "  j/k row  h/l or Tab/ShiftTab tab  Enter/i select  r refresh  Alt+hjkl pane  q/Esc quit"
                 }
                 LeftPaneMode::EditionPicker { .. } => {
-                    "  j/k edition  Enter confirm  Esc back  Alt+hjkl pane"
+                    "  j/k edition  Enter confirm  Esc back  Alt+hjkl pane  q quit"
                 }
                 LeftPaneMode::Configure { .. } => {
-                    "  Type site name  Enter install  Esc back  Alt+hjkl pane"
+                    "  Type site name  Backspace del  Enter install  Esc back  Alt+hjkl pane"
                 }
             },
             ActivePane::InstalledVersions => match &self.right_mode {
-                RightPaneMode::ConfirmDelete { .. } => "  y confirm  n/Esc cancel",
+                RightPaneMode::ConfirmDelete { .. } => "  y/Enter confirm  n/Esc cancel  q quit",
                 RightPaneMode::SiteNameInput { .. } => {
-                    "  Type site name  Enter create  Esc cancel"
+                    "  Type site name  Backspace del  Enter create  Esc cancel"
                 }
                 RightPaneMode::Browse => {
-                    "  j/k navigate  d delete  s create site  Alt+hjkl pane  q quit"
+                    "  j/k navigate  d delete  s create site  Alt+hjkl pane  q/Esc quit"
                 }
             },
             ActivePane::InstalledSites => match &self.right_mode {
-                RightPaneMode::ConfirmDelete { .. } => "  y confirm  n/Esc cancel",
-                _ => "  j/k navigate  d delete site  Alt+hjkl pane  q quit",
+                RightPaneMode::ConfirmDelete { .. } => "  y/Enter confirm  n/Esc cancel  q quit",
+                _ => "  j/k navigate  d delete site  Alt+hjkl pane  q/Esc quit",
             },
             ActivePane::LogPanel => {
                 if self.copy_mode {
