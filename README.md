@@ -51,10 +51,10 @@ Then open a new shell (or `source /etc/profile.d/nix.sh`) and you're ready.
 No cloning or installation required — Nix fetches, builds, and runs in one step:
 
 ```bash
-nix run github:your-org/cmk-helm
+nix run github:m3hransh/cmk-helm
 ```
 
-> Replace `your-org/cmk-helm` with the actual GitHub path (e.g. `github:mehran/cmk-helm`).
+> Replace `m3hransh/cmk-helm` with the actual GitHub path (e.g. `github:mehran/cmk-helm`).
 
 Nix pins all dependencies via `flake.lock`, so the build is fully reproducible — the same command produces the same binary for every user.
 
@@ -65,7 +65,7 @@ Nix pins all dependencies via `flake.lock`, so the build is fully reproducible �
 To have `cmk-helm` available as a regular command:
 
 ```bash
-nix profile install github:your-org/cmk-helm
+nix profile install github:m3hransh/cmk-helm
 ```
 
 Then just run:
@@ -144,7 +144,7 @@ nix profile upgrade cmk-helm
 
 ```bash
 # Clone
-git clone https://github.com/your-org/cmk-helm
+git clone https://github.com/m3hransh/cmk-helm
 cd cmk-helm
 
 # Enter the dev shell (automatic if you have direnv + .envrc)
