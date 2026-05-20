@@ -184,14 +184,16 @@
             # Developer ergonomics
             cargo-watch    # `cargo watch -x run`  — auto-restart on save
             cargo-expand   # `cargo expand`        — unfold macros (great for learning)
+            git-cliff      # `git cliff`            — generate CHANGELOG.md from commits
           ];
 
           shellHook = ''
             export PKG_CONFIG_PATH="${pkgs.openssl.dev}/lib/pkgconfig:$PKG_CONFIG_PATH"
             echo ""
             echo "  CMK Helm dev shell ready."
-            echo "  cargo run          — start the TUI"
-            echo "  cargo watch -x run — auto-restart on save"
+            echo "  cargo run           — start the TUI"
+            echo "  cargo watch -x run  — auto-restart on save"
+            echo "  git cliff -o CHANGELOG.md  — regenerate changelog"
             echo "  cargo clippy       — lint"
             echo ""
           '';
