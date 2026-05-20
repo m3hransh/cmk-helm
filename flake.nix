@@ -70,23 +70,106 @@
         # NOT invalidate it, so incremental builds stay fast.
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-        # The actual application binary, built on top of cached deps.
+        # ── Runtime Python toolchain ─────────────────────────────────────────
+        #
+        # cmk-cockpit shells out to cmk-dev-install / cmk-dev-site at runtime.
+        # We package them here from PyPI wheels so users get everything with a
+        # single `nix run` — no separate pipx/pip step needed.
+        #
+        # Rust concept (build systems): `format = "wheel"` tells
+        # buildPythonPackage to install the pre-built wheel archive directly
+        # instead of compiling from source. Pure-Python packages (tagged
+        # py3-none-any) ship as wheels that work on any platform, so this is
+        # both faster and simpler — no compiler, no build backend needed.
+        #
+        # Three packages are absent from nixpkgs and must be built here;
+        # the rest come from pkgs.python3Packages.
+
+        trickkiste = pkgs.python3Packages.buildPythonPackage {
+          pname = "trickkiste";
+          version = "0.3.7";
+          format = "wheel";
+          src = pkgs.fetchurl {
+            url = "https://files.pythonhosted.org/packages/7f/fb/b8862d2e799f0927c39a377393c2587d44e3161304895b9972f8393faaa2/trickkiste-0.3.7-py3-none-any.whl";
+            hash = "sha256-8C95pZ65dW6XxUvVMbpBpzaVOhj5SAm9BaEIaRhu+e0=";
+          };
+          dependencies = with pkgs.python3Packages; [ python-dateutil ];
+          doCheck = false;
+        };
+
+        python-jenkins = pkgs.python3Packages.buildPythonPackage {
+          pname = "python-jenkins";
+          version = "1.8.3";
+          format = "wheel";
+          src = pkgs.fetchurl {
+            url = "https://files.pythonhosted.org/packages/84/78/2105fc1fc43257057bf687429af3114f16b0574f905dd4840eabd40585ed/python_jenkins-1.8.3-py3-none-any.whl";
+            hash = "sha256-LhdmslPjsvKPUqv9DeRf/qoRkfmFIMyNdNLDF3huWdA=";
+          };
+          dependencies = with pkgs.python3Packages; [ pbr multi-key-dict requests ];
+          doCheck = false;
+        };
+
+        checkmk-dev-tools = pkgs.python3Packages.buildPythonPackage {
+          pname = "checkmk-dev-tools";
+          version = "2.2.0";
+          format = "wheel";
+          src = pkgs.fetchurl {
+            url = "https://files.pythonhosted.org/packages/6b/3f/896e2d62450d9a900b905d33ff4dcdf10b7696525920759e3acc4658b8cd/checkmk_dev_tools-2.2.0-py3-none-any.whl";
+            hash = "sha256-zfQXEzM4zWcLXqFcLs9kv3ekHv95dWKkSe0+/CsOrfk=";
+          };
+          dependencies = with pkgs.python3Packages; [
+            pydantic rich influxdb-client
+          ] ++ [ python-jenkins trickkiste ];
+          doCheck = false;
+        };
+
+        cmk-dev-site-pkg = pkgs.python3Packages.buildPythonPackage {
+          pname = "cmk-dev-site";
+          version = "1.15.2";
+          format = "wheel";
+          src = pkgs.fetchurl {
+            url = "https://files.pythonhosted.org/packages/e8/1b/441d3a55cf7893608292444d1bed08d5f8be1f57f6a7dbd6c75736693ad6/cmk_dev_site-1.15.2-py3-none-any.whl";
+            hash = "sha256-JK2eg0/1qGUm4yGHqZ9LA8IpiaSR4h0XMv3TnDVo9X4=";
+          };
+          dependencies = with pkgs.python3Packages; [
+            requests pyjwt cryptography fastapi uvicorn python-multipart
+          ] ++ [ checkmk-dev-tools ];
+          # The wheel metadata says checkmk-dev-tools<1, but the package has
+          # since moved to 2.x. The constraint is stale — relax it so Nix
+          # doesn't reject a working runtime combination.
+          pythonRelaxDeps = [ "checkmk-dev-tools" ];
+          doCheck = false;
+        };
+
+        # The Rust binary, wrapped so cmk-dev-site tools land on PATH.
+        #
+        # Rust concept (linking vs wrapping): we can't embed Python scripts
+        # into a Rust binary, so instead makeWrapper rewrites the installed
+        # $out/bin/cmk-cockpit script to prepend cmk-dev-site's bin/ to PATH
+        # before exec-ing the real binary. Anyone who runs the Nix-built binary
+        # gets cmk-dev-install / cmk-dev-site automatically — no separate install.
         cmk-cockpit = craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
           pname = "cmk-cockpit";
+          nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
+          postInstall = ''
+            wrapProgram $out/bin/cmk-cockpit \
+              --prefix PATH : ${pkgs.lib.makeBinPath [ cmk-dev-site-pkg ]}
+          '';
         });
 
       in {
         # ── Outputs ──────────────────────────────────────────────────────────
 
-        # `nix build .`  →  result/bin/cmk-cockpit
+        # `nix build .`            →  result/bin/cmk-cockpit (with bundled toolchain)
+        # `nix run .`              →  build & execute immediately
+        # `nix run github:you/repo` →  works for any user, no prior installs needed
         # `nix profile install .`  →  installs to user profile
         packages = {
           default = cmk-cockpit;
           inherit cmk-cockpit;
         };
 
-        # `nix run .`  →  build & execute immediately
         apps.default = flake-utils.lib.mkApp { drv = cmk-cockpit; };
 
         # `nix develop`  →  enter the dev shell (also used by direnv)
