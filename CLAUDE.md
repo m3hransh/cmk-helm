@@ -1,4 +1,4 @@
-# CMK Cockpit
+# CMK Helm
 
 A Rust TUI application (Ratatui) that provides an interactive terminal interface for browsing, selecting, and installing Checkmk packages via the `cmk-dev-site` / `cmk-dev-install` toolchain.
 

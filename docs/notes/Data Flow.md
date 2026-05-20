@@ -15,36 +15,37 @@ This note traces the full path from credentials file to running Checkmk site —
 
 ## Startup Data Flow
 
-```
-~/.cmk-credentials
-       │  read_credentials() → ("user", "pass")
-       ▼
-api::fetch_versions(CMK_DOWNLOAD_URL)
-       │  HTTP GET with Basic Auth
-       ▼
-https://download.checkmk.com/checkmk/
-       │  Apache autoindex HTML (not JSON!)
-       ▼
-parse_versions_from_html()
-       │  regex on <a href="..."> tags
-       ▼
-Vec<Version>
-       │  group_by_base_version()
-       ▼
-Vec<VersionGroup>  ──────────────────────────▶  App::version_groups
-                                                       │
-installer::list_installed_versions()          (tab display)
-       │  runs: omd versions -b
-       ▼
-Vec<String>  ─────────────────────────────────▶  App::installed_versions
+Data loading is **async and non-blocking**. `main.rs` spawns a background task immediately, then starts the TUI so the splash screen can animate while the network request is in flight.
 
-installer::list_installed_sites()
-       │  runs: omd sites
-       ▼
-Vec<SiteInfo>  ───────────────────────────────▶  App::installed_sites
+```
+main()
+  │
+  ├─ tokio::spawn ─────────────────────────────────────────────────────▶ background task
+  │                                                                              │
+  │   ~/.cmk-credentials                                                        │
+  │          │  read_credentials() → ("user", "pass")                           │
+  │          ▼                                                                   │
+  │   api::fetch_versions(CMK_DOWNLOAD_URL)                                     │
+  │          │  HTTP GET + Basic Auth                                            │
+  │          ▼                                                                   │
+  │   https://download.checkmk.com/checkmk/                                     │
+  │          │  Apache autoindex HTML (not JSON)                                 │
+  │          ▼                                                                   │
+  │   parse_versions_from_html() → Vec<VersionGroup>                            │
+  │          │                                                                   │
+  │   installer::list_installed_versions()  →  Vec<String>                      │
+  │   installer::list_installed_sites()     →  Vec<InstalledSite>               │
+  │          │                                                                   │
+  │          └──────────── oneshot tx.send(LoadResult) ──────────────────────▶  │
+  │                                                                              │
+  ├─ ratatui::init() + App::new_loading(rx).run()                               │
+  │      │                                                                       │
+  │      └─ splash screen animates ──────── poll_load_result() ──────────────── ▶ data arrives
+  │                                                                              │
+  └─────────────────────────────────── main UI renders ◀────────────────────────┘
 ```
 
-All three data fetches happen once in `main()` before the event loop starts. The UI loop never makes network calls.
+See [[Rust Oneshot Channel]] for how the channel handoff works, and [[Background Refresh]] for the 30-second auto-refresh that re-runs this fetch after startup.
 
 ---
 
@@ -74,29 +75,26 @@ A single static regex (via [[Rust LazyLock Static Variables]]) extracts and clas
 
 ## Install Data Flow
 
-When the user confirms on the Configure screen:
+When the user confirms on the Configure screen, an async job is spawned:
 
 ```
 InstallConfig { version, edition, site_name }
        │
        ▼
-installer::install_and_create_site()
+installer::spawn_install()
        │
-       ├─▶ tries: cmk-dev-install-site {version} -e {edition} -n {site_name}
-       │          (combined shortcut — one subprocess)
-       │
-       └─▶ fallback (if binary not on PATH):
-              cmk-dev-install {version} -e {edition}
-              cmk-dev-site {omd_version}.{edition} -n {site_name}
+       └─ tokio::spawn ──▶  cmk-dev-install {version} -e {edition}
+                            cmk-dev-site {omd_version} -n {site_name}
+                                   │  lines streamed via mpsc channel
+                                   ▼
+                            App::drain_job_messages() → log panel
 ```
 
-`which_exists()` checks if `cmk-dev-install-site` is on PATH before attempting it. The fallback runs two separate subprocesses in sequence.
-
-**Version string transformation:** the date in daily builds changes format when passed to `cmk-dev-install`:
+**Version string transformation:** the date in daily builds changes format:
 - Server directory: `2.5.0-2026.04.03` (dots in date)
 - CLI argument: `2.5.0-2026-04-03` (hyphens in date)
 
-This transformation lives in `Version::to_install_arg()`.
+This lives in `Version::install_arg()`.
 
 ---
 
@@ -104,7 +102,8 @@ This transformation lives in `Version::to_install_arg()`.
 
 | Concept | Where |
 |---------|-------|
-| [[Rust Async Await]] | `api::fetch_versions()` is async; startup awaits it |
+| [[Rust Async Await]] | `api::fetch_versions()` is async; startup and refresh await it |
+| [[Rust Oneshot Channel]] | Background fetch → TUI handoff at startup and on refresh |
 | [[Rust LazyLock Static Variables]] | Regex compiled once, reused per-call |
 | [[Rust Result Type and Error Propagation]] | Every step returns `Result<T>`, errors bubble up |
 | [[Rust Option Type]] | `list_installed_*` return `Vec::new()` on error (non-fatal) |
@@ -114,5 +113,5 @@ This transformation lives in `Version::to_install_arg()`.
 ## Metadata
 
 **Tags:** architecture
-**Reference:** `src/api/mod.rs`, `src/installer/mod.rs`, `src/main.rs`
-**Related:** [[Module Boundaries]], [[Credential Auth]], [[Version List Screen]], [[Installing Screen]]
+**Reference:** `src/api/mod.rs`, `src/installer/mod.rs`, `src/main.rs`, `src/ui/mod.rs`
+**Related:** [[Module Boundaries]], [[Credential Auth]], [[Rust Oneshot Channel]], [[Background Refresh]], [[TUI Event Loop]]

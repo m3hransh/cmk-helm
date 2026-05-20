@@ -9,40 +9,44 @@ aliases: [modules, code structure]
 
 # Module Boundaries
 
-CMK Cockpit is split into three modules, each with a single responsibility. This separation makes each module independently testable and keeps concerns from leaking.
+CMK Helm is split into four top-level modules, each with a single responsibility. The `ui/` module is further split into four files.
 
 ---
 
-## The Three Modules
+## Top-Level Modules
 
 ```
 src/
 ├── api/mod.rs        HTTP + HTML parsing + data types
-├── ui/mod.rs         App state machine + event loop + rendering
-└── installer/mod.rs  Subprocess wrappers
+├── ui/               App state machine + event loop + rendering (4 files)
+├── installer/mod.rs  Subprocess wrappers + async job system
+└── main.rs           Entry point: runtime init, background fetch, TUI handoff
 ```
 
 | Module | Owns | Does NOT own |
 |--------|------|--------------|
 | `api/` | Server communication, credential reading, `Version`/`Edition` types | UI, subprocess logic |
-| `ui/` | `App` struct, `Screen` enum, event loop, all Ratatui rendering | HTTP calls, subprocess spawning |
-| `installer/` | Spawning `cmk-dev-install`, `cmk-dev-site`, `omd` | HTTP, UI state |
+| `ui/` | `App` struct, pane state machines, event loop, all Ratatui rendering | HTTP calls, subprocess spawning |
+| `installer/` | Spawning `cmk-dev-install`, `cmk-dev-site`, `omd`; async job streaming | HTTP, UI state |
 
 ---
 
-## Why This Split?
+## `ui/` — Split Into Four Files
 
-**Testability** — `api/` tests can run without a terminal or a subprocess. Regex parsing tests don't need a network connection. `installer/` can be replaced by a stub in tests without touching the real network.
+The `ui/` module is large enough to warrant its own internal split. Rust allows multiple `impl` blocks for the same type across files — the compiler merges them.
 
-**Single responsibility** — Each module answers a different question:
-- `api/` answers "what versions exist on the server?"
-- `ui/` answers "what does the user want to do?"
-- `installer/` answers "how do we run the tools?"
+```
+src/ui/
+├── mod.rs    App struct + constructors + event loop + job/refresh system
+├── state.rs  Shared types: ActivePane, LeftPaneMode, RightPaneMode, PaneRects, LoadResult
+├── input.rs  impl App — all keyboard/mouse event handling
+└── render.rs impl App — all Ratatui rendering
+```
 
-**Allowed imports:**
-- `ui/` imports from `api/` (needs `Version`, `Edition`)
-- `ui/` imports from `installer/` (kicks off install)
-- `api/` and `installer/` know nothing about each other
+**Visibility rules used here:**
+- `state.rs` types are `pub(crate)` — visible to sibling submodules via `use super::state::*`
+- `handle_events` and `render` are `pub(super)` — callable from `mod.rs` (the parent), not from outside `ui/`
+- Private methods in `mod.rs` (e.g. `spawn_install_job`, `spawn_refresh`) are accessible to child modules `input.rs` and `render.rs` — Rust's rule that private items are visible to all descendants of the declaring module
 
 ---
 
@@ -55,60 +59,78 @@ Types:        Version, VersionKind, VersionGroup, Edition
 Functions:    read_credentials(), fetch_versions()
 ```
 
-The key design decision: the server returns **HTML directory listings**, not JSON. Versions are parsed from `<a href>` tags using a regex. See [[Data Flow]] and [[Credential Auth]].
+The server returns **HTML directory listings**, not JSON. Versions are parsed from `<a href>` tags using a regex. See [[Data Flow]] and [[Credential Auth]].
 
-Versions are grouped by base version (`2.5.0`, `2.4.0`, …) into `VersionGroup` for tab display. See [[Version List Screen]].
+Versions are grouped by base version (`2.5.0`, `2.4.0`, …) into `VersionGroup` for tab display.
 
 ---
 
 ## `ui/mod.rs` — What's Inside
 
 ```
-Enum:     Screen { VersionList, EditionPicker, Configure, Installing }
-Struct:   App { version_groups, active_tab, table_state, installed_*, screen }
-Methods:  App::run() (event loop), on_*() handlers, render_*() functions
+Struct:   App { version_groups, active_tab, table_state, pane state, jobs, refresh_rx, … }
+Methods:  App::new_loading() (constructor), run() (event loop),
+          poll_load_result(), poll_refresh_result(), spawn_refresh(),
+          drain_job_messages(), spawn_install_job()
 ```
 
-The `Screen` enum is the heart of the UI. Each variant carries the data that screen needs — nothing more. See [[App State Machine]].
+The `App` struct owns all mutable state. `run()` is the only async method — it drives the draw/poll/handle loop and checks both the splash receiver (`load_rx`) and the background refresh receiver (`refresh_rx`) every frame.
+
+See [[App State Machine]] and [[Background Refresh]].
+
+---
+
+## `ui/state.rs` — What's Inside
+
+```
+Constants: CMK_BLUE, CMK_GREEN (brand colours)
+Types:     LoadResult, ActivePane, LeftPaneMode, RightPaneMode, DeleteTarget, PaneRects
+```
+
+Splitting types into their own file avoids import cycles between `input.rs` and `render.rs` — both need the same enums but neither should depend on the other.
 
 ---
 
 ## `installer/mod.rs` — What's Inside
 
 ```
-Struct:    InstallConfig { version, edition, site_name }
-Functions: install_package(), create_site(), install_and_create_site()
+Structs:   InstallConfig, Job, JobMessage, JobStatus
+Functions: spawn_install(), spawn_delete_version(), spawn_delete_site(), spawn_create_site()
            list_installed_versions(), list_installed_sites()
-Helper:    which_exists()
+           ensure_sudo()
 ```
 
-`install_and_create_site()` tries the combined `cmk-dev-install-site` shortcut first, then falls back to calling the two tools separately. See [[Installing Screen]].
-
-`list_installed_versions()` and `list_installed_sites()` run `omd versions -b` and `omd sites` at startup to populate the right panel. See [[Installed Versions and Sites Panel]].
+Each `spawn_*` function creates a `tokio::task` that streams output lines back to the UI via an `mpsc::unbounded_channel`. The UI drains the channel each frame in `drain_job_messages()`. See [[Async Boundary Design]].
 
 ---
 
 ## `main.rs` — The Glue
 
-`main.rs` is intentionally thin (~30 lines). It:
-1. Calls `api::fetch_versions()` (async, one HTTP request)
-2. Calls `installer::list_installed_versions/sites()` (sync, two subprocesses)
-3. Initialises the Ratatui terminal
-4. Constructs `App` with the data
-5. Calls `app.run()` (the event loop)
-6. Restores the terminal on exit (even if `run()` errors)
+`main.rs` is intentionally thin (~45 lines). It:
+1. Calls `installer::ensure_sudo()` (before raw-mode takes over the terminal)
+2. Spawns a `tokio::task` that fetches versions + installed state, sends result via `oneshot`
+3. Initialises the Ratatui terminal (raw mode + alternate screen)
+4. Calls `App::new_loading(rx).run(terminal).await`
+5. Restores the terminal on exit regardless of error
 
-The terminal-restore logic uses a Rust pattern worth understanding: the alternate screen buffer is always restored, regardless of whether the app errored. See [[TUI Event Loop]].
+See [[Rust Oneshot Channel]] for why `oneshot` is used here.
 
 ---
 
-## Rust Design Pattern: Illegal States Unrepresentable
+## Allowed Imports
 
-The module boundary for `ui/` enforces a key Rust principle via the `Screen` enum: you cannot be in the `Configure` screen without having both a `Version` and an `Edition`. The type system prevents it. See [[App State Machine]] and [[Rust Enums and Algebraic Data Types]].
+```
+main.rs  →  api, ui, installer
+ui/      →  api (Version, Edition types), installer (Job, InstallConfig, …)
+api/     →  (nothing from this codebase)
+installer/ → (nothing from this codebase)
+```
+
+`api/` and `installer/` are intentionally unaware of each other and of `ui/`.
 
 ---
 
 ## Metadata
 
 **Tags:** architecture
-**Related:** [[App State Machine]], [[Data Flow]], [[CMK Cockpit]], [[Rust Enums and Algebraic Data Types]]
+**Related:** [[App State Machine]], [[Data Flow]], [[Rust Oneshot Channel]], [[Background Refresh]], [[Async Boundary Design]]

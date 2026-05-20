@@ -52,6 +52,7 @@ These notes explain Rust patterns as they appear in this codebase. If you're com
 | [[Rust Iterators]] | `.map().filter().collect()` — lazy and zero-cost |
 | [[Rust String vs str]] | Two string types and when to use each |
 | [[Rust Async Await]] | `async fn`, `.await`, and the Tokio runtime |
+| [[Rust Oneshot Channel]] | Single-use channel for background task → UI handoff |
 | [[Rust Derive Macros]] | Auto-generating trait impls with `#[derive(...)]` |
 | [[Rust LazyLock Static Variables]] | Compile-once statics for expensive initialisation |
 | [[Rust Let Else Pattern]] | Guarded enum destructuring without nested `if let` |
@@ -93,6 +94,7 @@ These notes explain Rust patterns as they appear in this codebase. If you're com
 | [[Configure Screen]] | Entering site name and confirming install config |
 | [[Installing Screen]] | Live install output and progress |
 | [[Installed Versions and Sites Panel]] | Right-hand panel showing local OMD state |
+| [[Background Refresh]] | Auto-refresh every 30 s and manual `r` key |
 | [[Credential Auth]] | How `~/.cmk-credentials` is read and used |
 
 ---

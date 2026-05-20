@@ -1,17 +1,17 @@
 ---
 id: "000"
-title: CMK Cockpit — Map of Content
+title: CMK Helm — Map of Content
 tags: [index, moc]
 created: 2025-04-03
 ---
 
-# CMK Cockpit — Map of Content
+# CMK Helm — Map of Content
 
-CMK Cockpit is a **Rust TUI application** that provides an interactive terminal interface for installing and managing Checkmk sites via the internal `cmk-dev-site` / `cmk-dev-install` toolchain.
+CMK Helm is a **Rust TUI application** that provides an interactive terminal interface for installing and managing Checkmk sites via the internal `cmk-dev-site` / `cmk-dev-install` toolchain.
 
 ## Why this exists
 
-The existing CLI tools (`cmk-dev-install`, `cmk-dev-site`, `omd`) are powerful but require knowing the right arguments and order of operations. CMK Cockpit makes the workflow interactive and discoverable:
+The existing CLI tools (`cmk-dev-install`, `cmk-dev-site`, `omd`) are powerful but require knowing the right arguments and order of operations. CMK Helm makes the workflow interactive and discoverable:
 
 1. Browse available package versions from the download server
 2. Select a version and edition
