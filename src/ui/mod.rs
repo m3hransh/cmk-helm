@@ -176,7 +176,7 @@ impl App {
             self.poll_load_result();
             self.poll_refresh_result();
 
-            // Auto-refresh every 30 seconds once the main UI is showing.
+            // Auto-refresh every 5 minutes once the main UI is showing.
             if self.load_rx.is_none()
                 && !self.is_refreshing
                 && self.last_refresh.elapsed() >= Duration::from_secs(300)
