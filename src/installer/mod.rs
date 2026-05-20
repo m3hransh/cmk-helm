@@ -361,6 +361,148 @@ pub fn spawn_install(config: InstallConfig, job_id: JobId, tx: mpsc::UnboundedSe
     });
 }
 
+/// Removes a Checkmk version — mirrors `cmk-dev-install`'s `remove_package`:
+///
+///   1. `sudo rm -rf /omd/versions/{version}`  — removes the installation directory
+///   2. `dpkg -l {pkg_name}`                    — checks if the deb is installed
+///   3. `sudo apt-get purge -y {pkg_name}`      — removes the deb package
+///
+/// The package name is derived from the version string. The omd version
+/// format is `{base}-{date}.{edition}` (daily) or `{base}p{n}.{edition}`
+/// (stable). The deb package name is `check-mk-{edition_long}-{base_version}`.
+pub fn spawn_delete_version(version: String, job_id: JobId, tx: mpsc::UnboundedSender<JobMessage>) {
+    crate::debug::log(&format!(
+        "spawn_delete_version: job_id={job_id} version={version}"
+    ));
+
+    tokio::spawn(async move {
+        let install_path = format!("/omd/versions/{version}");
+
+        // Step 1: remove the installation directory.
+        let _ = tx.send(JobMessage::Output(
+            job_id,
+            format!("→ sudo rm -rf {install_path}"),
+        ));
+        let ok = run_streaming("sudo", &["rm", "-rf", &install_path], job_id, &tx)
+            .await
+            .unwrap_or(false);
+        if !ok {
+            let _ = tx.send(JobMessage::Finished(job_id, false));
+            return;
+        }
+
+        // Step 2: derive the deb package name and purge it if installed.
+        // omd version format: "2.6.0-2026.04.10.ultimate" or "2.4.0p24.cee"
+        // The edition is the suffix after the last dot.
+        if let Some(pkg_name) = omd_version_to_pkg_name(&version) {
+            // Check if the deb is installed before trying to purge.
+            let _ = tx.send(JobMessage::Output(job_id, format!("→ dpkg -l {pkg_name}")));
+            let installed = run_streaming("dpkg", &["-l", &pkg_name], job_id, &tx)
+                .await
+                .unwrap_or(false);
+
+            if installed {
+                let _ = tx.send(JobMessage::Output(
+                    job_id,
+                    format!("→ sudo apt-get purge -y {pkg_name}"),
+                ));
+                let _ = run_streaming("sudo", &["apt-get", "purge", "-y", &pkg_name], job_id, &tx)
+                    .await;
+            } else {
+                let _ = tx.send(JobMessage::Output(
+                    job_id,
+                    "  (deb package not found, skipping purge)".to_string(),
+                ));
+            }
+        }
+
+        let _ = tx.send(JobMessage::Finished(job_id, true));
+    });
+}
+
+/// Converts an omd version string to an apt package name.
+///
+/// Examples:
+///   "2.6.0-2026.04.10.ultimate"  →  "check-mk-ultimate-2.6.0-2026.04.10"
+///   "2.4.0p24.cee"               →  "check-mk-enterprise-2.4.0p24"
+///   "2.5.0b3.cre"                →  "check-mk-raw-2.5.0b3"
+fn omd_version_to_pkg_name(omd_version: &str) -> Option<String> {
+    // The edition is the last dot-separated segment.
+    let dot_pos = omd_version.rfind('.')?;
+    let base = &omd_version[..dot_pos];
+    let edition_short = &omd_version[dot_pos + 1..];
+
+    // v2.5+ uses new edition names (cloud, ultimate, …), v2.4- uses short
+    // codes (cce, cee, …). The deb package name matches the edition exactly
+    // — they're different packages, not aliases.
+    let edition_long = match edition_short {
+        "cre" => "raw",
+        "cee" => "enterprise",
+        "cce" => "cce",
+        "cme" => "managed",
+        "community" => "raw",
+        "pro" => "enterprise",
+        "cloud" => "cloud",
+        "ultimate" => "ultimate",
+        "ultimatemt" => "saas",
+        other => other, // fallback: use as-is
+    };
+
+    Some(format!("check-mk-{edition_long}-{base}"))
+}
+
+/// Spawns `sudo omd rm {site_name}` to remove an OMD site.
+/// Requires root — omd manages system sites.
+pub fn spawn_delete_site(site_name: String, job_id: JobId, tx: mpsc::UnboundedSender<JobMessage>) {
+    crate::debug::log(&format!(
+        "spawn_delete_site: job_id={job_id} site={site_name}"
+    ));
+
+    tokio::spawn(async move {
+        let _ = tx.send(JobMessage::Output(
+            job_id,
+            format!("→ sudo omd rm {site_name}"),
+        ));
+
+        let success = run_streaming("sudo", &["omd", "-f", "rm", "--kill", "--apache-reload", &site_name], job_id, &tx)
+            .await
+            .unwrap_or(false);
+
+        let _ = tx.send(JobMessage::Finished(job_id, success));
+    });
+}
+
+/// Spawns `cmk-dev-site {omd_version} -n {site_name}` to create a site
+/// from an already-installed version.
+pub fn spawn_create_site(
+    omd_version: String,
+    site_name: String,
+    job_id: JobId,
+    tx: mpsc::UnboundedSender<JobMessage>,
+) {
+    crate::debug::log(&format!(
+        "spawn_create_site: job_id={job_id} omd_version={omd_version} site={site_name}"
+    ));
+
+    tokio::spawn(async move {
+        let _ = tx.send(JobMessage::Output(
+            job_id,
+            format!("→ cmk-dev-site {omd_version} -n {site_name}"),
+        ));
+
+        let success = run_streaming(
+            "cmk-dev-site",
+            &[&omd_version, "-n", &site_name],
+            job_id,
+            &tx,
+        )
+        .await
+        .unwrap_or(false);
+
+        let _ = tx.send(JobMessage::Finished(job_id, success));
+    });
+}
+
 /// Runs a command asynchronously, streaming stdout and stderr line-by-line
 /// through the channel. Returns `Ok(true)` if exit code is 0.
 ///
@@ -500,4 +642,25 @@ fn which_exists(name: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// Caches sudo credentials before the TUI enters raw mode.
+///
+/// `sudo -n true` checks if credentials are already cached (non-interactive).
+/// If not, `sudo -v` prompts for the password in the normal terminal.
+/// This must be called before `ratatui::init()` — once in raw mode, sudo
+/// can't display its password prompt.
+pub fn ensure_sudo() {
+    // Check if sudo is already cached — `-n` means non-interactive.
+    let cached = Command::new("sudo")
+        .args(["-n", "true"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if !cached {
+        println!("This app needs sudo for install/delete operations.");
+        // `-v` validates and caches the credential, prompting if needed.
+        let _ = Command::new("sudo").arg("-v").status();
+    }
 }

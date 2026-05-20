@@ -186,14 +186,18 @@ fn parse_semver(s: &str) -> (u32, u32, u32) {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Edition {
+    // v2.5+ editions
     Community,
     Pro,
     Ultimate,
     Ultimatemt,
+    // v2.4- editions
     Cee,
     Cre,
-    Cloud,
+    Cce,
     Cme,
+    // v2.5+ cloud (different package name from cce)
+    Cloud,
 }
 
 impl Edition {
@@ -205,8 +209,9 @@ impl Edition {
             Self::Ultimatemt => "ultimatemt",
             Self::Cee => "cee",
             Self::Cre => "cre",
-            Self::Cloud => "cloud",
+            Self::Cce => "cce",
             Self::Cme => "cme",
+            Self::Cloud => "cloud",
         }
     }
 
@@ -218,8 +223,9 @@ impl Edition {
             Self::Ultimatemt => "Ultimate Multitenant",
             Self::Cee => "Enterprise (cee)",
             Self::Cre => "Community Raw (cre)",
-            Self::Cloud => "Cloud (cce)",
+            Self::Cce => "Cloud (cce)",
             Self::Cme => "Managed Services (cme)",
+            Self::Cloud => "Cloud",
         }
     }
 }

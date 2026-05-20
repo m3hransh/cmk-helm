@@ -84,6 +84,36 @@ enum LeftPaneMode {
     },
 }
 
+// ── Right Pane Sub-modes ─────────────────────────────────────────────────────
+//
+// The installed versions and sites panes can enter inline modes for
+// confirmation prompts and site name input, similar to the left pane's
+// EditionPicker / Configure modes.
+
+#[derive(Debug)]
+enum RightPaneMode {
+    /// Normal browsing — j/k navigates, d/s triggers actions.
+    Browse,
+
+    /// Confirming a destructive action. Shows "Are you sure? y/n".
+    /// `action` is the label shown, `on_confirm` is called on 'y'.
+    ConfirmDelete { label: String, target: DeleteTarget },
+
+    /// Typing a site name to create a site from an installed version.
+    SiteNameInput {
+        /// The omd version string to pass to cmk-dev-site.
+        omd_version: String,
+        site_input: String,
+    },
+}
+
+/// What a delete confirmation is targeting.
+#[derive(Debug)]
+enum DeleteTarget {
+    Version(String),
+    Site(String),
+}
+
 // ── Pane Geometry ────────────────────────────────────────────────────────────
 //
 // Stored each frame so mouse clicks can be mapped to panes via hit-testing.
@@ -110,6 +140,7 @@ pub struct App {
     // ── Pane focus ──────────────────────────────────────────────────────────
     active_pane: ActivePane,
     left_mode: LeftPaneMode,
+    right_mode: RightPaneMode,
 
     // ── Pane geometry (updated each render for mouse hit-testing) ────────
     pane_rects: PaneRects,
@@ -162,6 +193,7 @@ impl App {
             table_state: TableState::default().with_selected(0),
             active_pane: ActivePane::VersionBrowser,
             left_mode: LeftPaneMode::Browse,
+            right_mode: RightPaneMode::Browse,
             pane_rects: PaneRects::default(),
             installed_versions,
             versions_list_state,
@@ -462,13 +494,15 @@ impl App {
             // Tab navigation for base-version tabs.
             KeyCode::Tab => self.next_tab(),
             KeyCode::BackTab => self.prev_tab(),
+            KeyCode::Char('l') => self.next_tab(),
+            KeyCode::Char('h') => self.prev_tab(),
 
             // Row navigation within the version list.
             KeyCode::Up | KeyCode::Char('k') => self.select_prev_row(),
             KeyCode::Down | KeyCode::Char('j') => self.select_next_row(),
 
             // Select a version → open edition picker inline.
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Char('i') => {
                 if let Some(vi) = self.table_state.selected() {
                     let gi = self.active_tab;
                     let version = &self.version_groups[gi].versions[vi];
@@ -647,6 +681,14 @@ impl App {
     // ── Installed Versions Input ─────────────────────────────────────────────
 
     fn on_installed_versions(&mut self, code: KeyCode) {
+        match &self.right_mode {
+            RightPaneMode::Browse => self.on_installed_versions_browse(code),
+            RightPaneMode::ConfirmDelete { .. } => self.on_right_confirm(code),
+            RightPaneMode::SiteNameInput { .. } => self.on_right_site_input(code),
+        }
+    }
+
+    fn on_installed_versions_browse(&mut self, code: KeyCode) {
         let len = self.installed_versions.len();
         match code {
             KeyCode::Up | KeyCode::Char('k') => {
@@ -665,7 +707,26 @@ impl App {
                     .unwrap_or(0);
                 self.versions_list_state.select(Some(next));
             }
-            // TODO (Phase 4): 'd' to delete version, 's' to create site from version.
+            KeyCode::Char('d') => {
+                if let Some(idx) = self.versions_list_state.selected() {
+                    if let Some(version) = self.installed_versions.get(idx) {
+                        self.right_mode = RightPaneMode::ConfirmDelete {
+                            label: format!("Delete version {version}?"),
+                            target: DeleteTarget::Version(version.clone()),
+                        };
+                    }
+                }
+            }
+            KeyCode::Char('s') => {
+                if let Some(idx) = self.versions_list_state.selected() {
+                    if let Some(version) = self.installed_versions.get(idx) {
+                        self.right_mode = RightPaneMode::SiteNameInput {
+                            omd_version: version.clone(),
+                            site_input: String::new(),
+                        };
+                    }
+                }
+            }
             KeyCode::Esc => self.should_quit = true,
             _ => {}
         }
@@ -674,6 +735,14 @@ impl App {
     // ── Installed Sites Input ────────────────────────────────────────────────
 
     fn on_installed_sites(&mut self, code: KeyCode) {
+        match &self.right_mode {
+            RightPaneMode::Browse => self.on_installed_sites_browse(code),
+            RightPaneMode::ConfirmDelete { .. } => self.on_right_confirm(code),
+            RightPaneMode::SiteNameInput { .. } => self.on_right_site_input(code),
+        }
+    }
+
+    fn on_installed_sites_browse(&mut self, code: KeyCode) {
         let len = self.installed_sites.len();
         match code {
             KeyCode::Up | KeyCode::Char('k') => {
@@ -692,8 +761,101 @@ impl App {
                     .unwrap_or(0);
                 self.sites_list_state.select(Some(next));
             }
-            // TODO (Phase 4): 'd' to delete site.
+            KeyCode::Char('d') => {
+                if let Some(idx) = self.sites_list_state.selected() {
+                    if let Some(site) = self.installed_sites.get(idx) {
+                        self.right_mode = RightPaneMode::ConfirmDelete {
+                            label: format!("Delete site {}?", site.name),
+                            target: DeleteTarget::Site(site.name.clone()),
+                        };
+                    }
+                }
+            }
             KeyCode::Esc => self.should_quit = true,
+            _ => {}
+        }
+    }
+
+    // ── Right Pane Confirm / Site Input ──────────────────────────────────────
+
+    fn on_right_confirm(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                // Extract target before resetting mode (borrow rules).
+                let RightPaneMode::ConfirmDelete { target, .. } = &self.right_mode else {
+                    return;
+                };
+                match target {
+                    DeleteTarget::Version(version) => {
+                        let job_id = self.next_job_id;
+                        self.next_job_id += 1;
+                        let label = format!("delete version {version}");
+                        self.jobs.push(installer::Job {
+                            id: job_id,
+                            label,
+                            status: installer::JobStatus::Running,
+                            output: Vec::new(),
+                        });
+                        installer::spawn_delete_version(
+                            version.clone(),
+                            job_id,
+                            self.job_tx.clone(),
+                        );
+                    }
+                    DeleteTarget::Site(name) => {
+                        let job_id = self.next_job_id;
+                        self.next_job_id += 1;
+                        let label = format!("delete site {name}");
+                        self.jobs.push(installer::Job {
+                            id: job_id,
+                            label,
+                            status: installer::JobStatus::Running,
+                            output: Vec::new(),
+                        });
+                        installer::spawn_delete_site(name.clone(), job_id, self.job_tx.clone());
+                    }
+                }
+                self.right_mode = RightPaneMode::Browse;
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                self.right_mode = RightPaneMode::Browse;
+            }
+            _ => {}
+        }
+    }
+
+    fn on_right_site_input(&mut self, code: KeyCode) {
+        let RightPaneMode::SiteNameInput {
+            omd_version,
+            site_input,
+        } = &mut self.right_mode
+        else {
+            return;
+        };
+
+        match code {
+            KeyCode::Esc => {
+                self.right_mode = RightPaneMode::Browse;
+            }
+            KeyCode::Char(c) => site_input.push(c),
+            KeyCode::Backspace => {
+                site_input.pop();
+            }
+            KeyCode::Enter if !site_input.is_empty() => {
+                let job_id = self.next_job_id;
+                self.next_job_id += 1;
+                let label = format!("create site from {omd_version}");
+                let omd_ver = omd_version.clone();
+                let site = site_input.clone();
+                self.jobs.push(installer::Job {
+                    id: job_id,
+                    label,
+                    status: installer::JobStatus::Running,
+                    output: Vec::new(),
+                });
+                installer::spawn_create_site(omd_ver, site, job_id, self.job_tx.clone());
+                self.right_mode = RightPaneMode::Browse;
+            }
             _ => {}
         }
     }
@@ -995,6 +1157,18 @@ impl App {
     fn render_installed_versions(&mut self, frame: &mut Frame, area: Rect) {
         let is_focused = self.active_pane == ActivePane::InstalledVersions;
 
+        // If there's an active prompt and this pane is focused, split area.
+        let (list_area, prompt_area) =
+            if is_focused && !matches!(self.right_mode, RightPaneMode::Browse) {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Min(0), Constraint::Length(3)])
+                    .split(area);
+                (chunks[0], Some(chunks[1]))
+            } else {
+                (area, None)
+            };
+
         let items: Vec<ListItem> = if self.installed_versions.is_empty() {
             vec![ListItem::new("  (none found)").style(Style::default().fg(Color::DarkGray))]
         } else {
@@ -1019,13 +1193,28 @@ impl App {
             )
             .highlight_symbol("▶ ");
 
-        frame.render_stateful_widget(list, area, &mut self.versions_list_state);
+        frame.render_stateful_widget(list, list_area, &mut self.versions_list_state);
+
+        if let Some(prompt_area) = prompt_area {
+            self.render_right_prompt(frame, prompt_area);
+        }
     }
 
     // ── Right panel: Installed Sites ─────────────────────────────────────────
 
     fn render_installed_sites(&mut self, frame: &mut Frame, area: Rect) {
         let is_focused = self.active_pane == ActivePane::InstalledSites;
+
+        let (list_area, prompt_area) =
+            if is_focused && !matches!(self.right_mode, RightPaneMode::Browse) {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Min(0), Constraint::Length(3)])
+                    .split(area);
+                (chunks[0], Some(chunks[1]))
+            } else {
+                (area, None)
+            };
 
         let items: Vec<ListItem> = if self.installed_sites.is_empty() {
             vec![ListItem::new("  (none found)").style(Style::default().fg(Color::DarkGray))]
@@ -1062,7 +1251,43 @@ impl App {
             )
             .highlight_symbol("▶ ");
 
-        frame.render_stateful_widget(list, area, &mut self.sites_list_state);
+        frame.render_stateful_widget(list, list_area, &mut self.sites_list_state);
+
+        if let Some(prompt_area) = prompt_area {
+            self.render_right_prompt(frame, prompt_area);
+        }
+    }
+
+    /// Renders the inline prompt for confirm/site-name-input in the right panel.
+    fn render_right_prompt(&self, frame: &mut Frame, area: Rect) {
+        match &self.right_mode {
+            RightPaneMode::Browse => {}
+            RightPaneMode::ConfirmDelete { label, .. } => {
+                frame.render_widget(
+                    Paragraph::new(format!(" {label}  (y/n)"))
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_style(Style::default().fg(Color::Red)),
+                        )
+                        .style(Style::default().fg(Color::Red)),
+                    area,
+                );
+            }
+            RightPaneMode::SiteNameInput { site_input, .. } => {
+                frame.render_widget(
+                    Paragraph::new(format!(" {site_input}█"))
+                        .block(
+                            Block::default()
+                                .title(" Site Name ")
+                                .borders(Borders::ALL)
+                                .border_style(Style::default().fg(Color::Cyan)),
+                        )
+                        .style(Style::default().fg(Color::White)),
+                    area,
+                );
+            }
+        }
     }
 
     // ── Log Panel ────────────────────────────────────────────────────────────
@@ -1160,10 +1385,17 @@ impl App {
                     "  Type site name  Enter install  Esc back  Alt+hjkl pane"
                 }
             },
-            ActivePane::InstalledVersions => {
-                "  j/k navigate  d delete  s create site  Alt+hjkl pane  q quit"
-            }
-            ActivePane::InstalledSites => "  j/k navigate  d delete site  Alt+hjkl pane  q quit",
+            ActivePane::InstalledVersions => match &self.right_mode {
+                RightPaneMode::ConfirmDelete { .. } => "  y confirm  n/Esc cancel",
+                RightPaneMode::SiteNameInput { .. } => "  Type site name  Enter create  Esc cancel",
+                RightPaneMode::Browse => {
+                    "  j/k navigate  d delete  s create site  Alt+hjkl pane  q quit"
+                }
+            },
+            ActivePane::InstalledSites => match &self.right_mode {
+                RightPaneMode::ConfirmDelete { .. } => "  y confirm  n/Esc cancel",
+                _ => "  j/k navigate  d delete site  Alt+hjkl pane  q quit",
+            },
             ActivePane::LogPanel => "  j/k scroll  Alt+hjkl pane  q quit",
         };
 
