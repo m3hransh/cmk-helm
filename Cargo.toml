@@ -1,10 +1,10 @@
 [package]
-name = "cmk-cockpit"
+name = "cmk-helm"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "cmk-cockpit"
+name = "cmk-helm"
 path = "src/main.rs"
 
 [dependencies]

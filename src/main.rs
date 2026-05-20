@@ -9,7 +9,7 @@ use api::CMK_DOWNLOAD_URL;
 #[tokio::main]
 async fn main() -> Result<()> {
     debug::init();
-    debug::log("cmk-cockpit starting");
+    debug::log("cmk-helm starting");
 
     // Fetch everything before entering raw mode so any error prints cleanly.
 

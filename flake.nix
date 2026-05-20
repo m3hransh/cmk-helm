@@ -1,5 +1,5 @@
 {
-  description = "CMK Cockpit — interactive TUI for cmk-dev-site";
+  description = "CMK Helm — interactive TUI for cmk-dev-site";
 
   inputs = {
     # The main Nix package set — we follow unstable for fresh Rust support
@@ -72,7 +72,7 @@
 
         # ── Runtime Python toolchain ─────────────────────────────────────────
         #
-        # cmk-cockpit shells out to cmk-dev-install / cmk-dev-site at runtime.
+        # cmk-helm shells out to cmk-dev-install / cmk-dev-site at runtime.
         # We package them here from PyPI wheels so users get everything with a
         # single `nix run` — no separate pipx/pip step needed.
         #
@@ -134,9 +134,9 @@
           dependencies = with pkgs.python3Packages; [
             requests pyjwt cryptography fastapi uvicorn python-multipart
           ] ++ [ checkmk-dev-tools ];
-          # The wheel metadata says checkmk-dev-tools<1, but the package has
-          # since moved to 2.x. The constraint is stale — relax it so Nix
-          # doesn't reject a working runtime combination.
+          # The published 1.15.2 wheel declares checkmk-dev-tools<1 (stale).
+          # The constraint has been fixed upstream in cmk-dev-site's pyproject.toml;
+          # remove this once a new release is published to PyPI.
           pythonRelaxDeps = [ "checkmk-dev-tools" ];
           doCheck = false;
         };
@@ -145,15 +145,15 @@
         #
         # Rust concept (linking vs wrapping): we can't embed Python scripts
         # into a Rust binary, so instead makeWrapper rewrites the installed
-        # $out/bin/cmk-cockpit script to prepend cmk-dev-site's bin/ to PATH
+        # $out/bin/cmk-helm script to prepend cmk-dev-site's bin/ to PATH
         # before exec-ing the real binary. Anyone who runs the Nix-built binary
         # gets cmk-dev-install / cmk-dev-site automatically — no separate install.
-        cmk-cockpit = craneLib.buildPackage (commonArgs // {
+        cmk-helm = craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
-          pname = "cmk-cockpit";
+          pname = "cmk-helm";
           nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
           postInstall = ''
-            wrapProgram $out/bin/cmk-cockpit \
+            wrapProgram $out/bin/cmk-helm \
               --prefix PATH : ${pkgs.lib.makeBinPath [ cmk-dev-site-pkg ]}
           '';
         });
@@ -161,16 +161,16 @@
       in {
         # ── Outputs ──────────────────────────────────────────────────────────
 
-        # `nix build .`            →  result/bin/cmk-cockpit (with bundled toolchain)
+        # `nix build .`            →  result/bin/cmk-helm (with bundled toolchain)
         # `nix run .`              →  build & execute immediately
         # `nix run github:you/repo` →  works for any user, no prior installs needed
         # `nix profile install .`  →  installs to user profile
         packages = {
-          default = cmk-cockpit;
-          inherit cmk-cockpit;
+          default = cmk-helm;
+          inherit cmk-helm;
         };
 
-        apps.default = flake-utils.lib.mkApp { drv = cmk-cockpit; };
+        apps.default = flake-utils.lib.mkApp { drv = cmk-helm; };
 
         # `nix develop`  →  enter the dev shell (also used by direnv)
         devShells.default = craneLib.devShell {
@@ -189,7 +189,7 @@
           shellHook = ''
             export PKG_CONFIG_PATH="${pkgs.openssl.dev}/lib/pkgconfig:$PKG_CONFIG_PATH"
             echo ""
-            echo "  CMK Cockpit dev shell ready."
+            echo "  CMK Helm dev shell ready."
             echo "  cargo run          — start the TUI"
             echo "  cargo watch -x run — auto-restart on save"
             echo "  cargo clippy       — lint"
@@ -199,7 +199,7 @@
 
         # `nix flake check`  →  run clippy + fmt + full build
         checks = {
-          inherit cmk-cockpit;
+          inherit cmk-helm;
 
           clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
