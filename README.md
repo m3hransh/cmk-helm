@@ -19,7 +19,7 @@ A terminal UI for browsing, selecting, and installing [Checkmk](https://checkmk.
 
 ## Requirements
 
-- **[Nix](https://nixos.org/download)** with flakes enabled
+- **Nix** with flakes enabled (see below)
 - A `~/.cmk-credentials` file with your Checkmk download credentials:
 
 ```
@@ -28,13 +28,21 @@ username:password
 
 The bundled Nix package includes `cmk-dev-install` and `cmk-dev-site` automatically — no separate installation needed.
 
-### Enable Nix flakes
+### Install Nix on Ubuntu
 
-If you haven't enabled flakes yet, add this to `/etc/nix/nix.conf` (or `~/.config/nix/nix.conf`):
+The easiest way is the [Determinate Systems installer](https://github.com/DeterminateSystems/nix-installer) — it enables flakes by default and handles multi-user setup automatically:
 
+```bash
+curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install
 ```
-experimental-features = nix-command flakes
-```
+
+Then open a new shell (or `source /etc/profile.d/nix.sh`) and you're ready.
+
+> **Official installer alternative:** if you prefer the official Nix installer from [nixos.org/download](https://nixos.org/download), run it first, then enable flakes manually by adding this line to `/etc/nix/nix.conf`:
+> ```
+> experimental-features = nix-command flakes
+> ```
+> and restart the Nix daemon: `sudo systemctl restart nix-daemon`
 
 ---
 
