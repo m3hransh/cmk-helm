@@ -104,7 +104,7 @@ pub struct App {
     //
     // Refresh re-uses the same LoadResult oneshot pattern as initial load, but
     // without a splash screen. `last_refresh` is reset every time fresh data
-    // arrives so the 30-second clock runs from the last successful fetch.
+    // arrives so the 5-minute clock runs from the last successful fetch.
     refresh_rx: Option<oneshot::Receiver<Result<LoadResult>>>,
     is_refreshing: bool,
     last_refresh: Instant,
@@ -179,7 +179,7 @@ impl App {
             // Auto-refresh every 30 seconds once the main UI is showing.
             if self.load_rx.is_none()
                 && !self.is_refreshing
-                && self.last_refresh.elapsed() >= Duration::from_secs(30)
+                && self.last_refresh.elapsed() >= Duration::from_secs(300)
             {
                 self.spawn_refresh();
             }

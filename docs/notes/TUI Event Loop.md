@@ -26,7 +26,7 @@ pub async fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
 
         // auto-refresh every 30 s once main UI is showing
         if self.load_rx.is_none() && !self.is_refreshing
-            && self.last_refresh.elapsed() >= Duration::from_secs(30)
+            && self.last_refresh.elapsed() >= Duration::from_secs(300)
         {
             self.spawn_refresh();
         }

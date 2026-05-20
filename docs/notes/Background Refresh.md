@@ -9,7 +9,7 @@ aliases: [auto-refresh, version refresh, r key]
 
 # Background Refresh
 
-The version list refreshes automatically every 30 seconds and can be triggered manually with `r`. The refresh runs in a background task and doesn't block the UI.
+The version list refreshes automatically every 5 minutes and can be triggered manually with `r`. The refresh runs in a background task and doesn't block the UI.
 
 ---
 
@@ -18,7 +18,7 @@ The version list refreshes automatically every 30 seconds and can be triggered m
 | Trigger | Condition |
 |---|---|
 | Press `r` | From the Version Browser in Browse mode |
-| Automatic | 30 seconds after the last successful fetch |
+| Automatic | 5 minutes after the last successful fetch |
 
 A refresh is silently ignored if one is already in progress (`is_refreshing == true`) or if the initial splash is still showing (`load_rx.is_some()`).
 
@@ -60,18 +60,18 @@ fn spawn_refresh(&mut self) {
 
 `tokio::spawn` is not an async function — it just schedules the task and returns immediately. So `spawn_refresh` can be a regular sync method called from the event loop.
 
-The 30-second auto-trigger lives in `run()`:
+The 5-minute auto-trigger lives in `run()`:
 
 ```rust
 if self.load_rx.is_none()
     && !self.is_refreshing
-    && self.last_refresh.elapsed() >= Duration::from_secs(30)
+    && self.last_refresh.elapsed() >= Duration::from_secs(300)
 {
     self.spawn_refresh();
 }
 ```
 
-`last_refresh: Instant` is reset to `Instant::now()` every time data arrives — whether from the initial load or a subsequent refresh. So the 30 seconds are always measured from the last successful fetch.
+`last_refresh: Instant` is reset to `Instant::now()` every time data arrives — whether from the initial load or a subsequent refresh. So the 5 minutes are always measured from the last successful fetch.
 
 ---
 

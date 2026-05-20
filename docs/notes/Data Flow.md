@@ -45,7 +45,7 @@ main()
   └─────────────────────────────────── main UI renders ◀────────────────────────┘
 ```
 
-See [[Rust Oneshot Channel]] for how the channel handoff works, and [[Background Refresh]] for the 30-second auto-refresh that re-runs this fetch after startup.
+See [[Rust Oneshot Channel]] for how the channel handoff works, and [[Background Refresh]] for the 5-minute auto-refresh that re-runs this fetch after startup.
 
 ---
 
