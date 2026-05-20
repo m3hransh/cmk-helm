@@ -126,10 +126,10 @@ impl App {
             row(5),
         );
 
-        // Row 7 — subtitle
+        // Row 7 — version
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                "Version Browser & Installer",
+                concat!("v", env!("CARGO_PKG_VERSION")),
                 Style::default().fg(Color::DarkGray),
             )))
             .alignment(Alignment::Center),
@@ -158,11 +158,12 @@ impl App {
 
         // Show a braille spinner in the title while a background refresh runs.
         const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        const VERSION: &str = env!("CARGO_PKG_VERSION");
         let title = if self.is_refreshing {
             let s = SPINNER[(self.splash_tick as usize / 2) % 10];
-            format!(" CMK Helm {s} ")
+            format!(" CMK Helm v{VERSION} {s} ")
         } else {
-            " CMK Helm ".to_string()
+            format!(" CMK Helm v{VERSION} ")
         };
 
         let tabs = Tabs::new(titles)
