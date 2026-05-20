@@ -9,29 +9,28 @@ aliases: [layout, TUI layout, split pane]
 
 # TUI Layout Design
 
-The terminal window is divided into three horizontal bands: tabs, body, footer. The body is further split into a left pane (60%) and a right pane (40%).
+The terminal window is divided into four horizontal bands: tab bar, body, log panel, footer. The body is further split into a left pane (60%) and a right pane (40%).
 
 ---
 
 ## Layout Diagram
 
 ```
-┌─ CMK Cockpit ── [2.6.0] [2.5.0] [2.4.0] … ──────────────────────────┐
-├──────────────────────────────────┬───────────────────────────────────┤
-│  Left pane (60%)                 │  Right pane (40%) — always shown  │
-│                                  │                                   │
-│  Changes per screen:             │  Installed Versions               │
-│  VersionList → version table     │  ─────────────────────────────    │
-│  EditionPicker → edition list    │  2.4.0p24.cee                     │
-│  Configure → input form          │  2.5.0-2026.04.03.raw             │
-│  Installing → progress output    │                                   │
-│                                  │  Installed Sites (★ = default)    │
-│                                  │  ─────────────────────────────    │
-│                                  │  ★ mysite   2.4.0p24.cee          │
-│                                  │    testsite  2.5.0.raw            │
-├──────────────────────────────────┴───────────────────────────────────┤
-│  Key hints (context-sensitive): ↑↓ navigate  Enter confirm  Esc back │
-└──────────────────────────────────────────────────────────────────────┘
+┌─ CMK Helm ── [2.6.0] [2.5.0] [2.4.0] ── Tab/ShiftTab ───────────────┐
+├──────────────────────────┬────────────────────────────────────────────┤
+│  Version Browser (left)  │  Installed Versions (right-top)           │
+│                          │   ▶ 2.6.0-….ultimate                      │
+│  ▶ daily  2026.04.03    │   [d]elete  [s]ite from version           │
+│    stable p24            ├────────────────────────────────────────────┤
+│                          │  Installed Sites (right-bottom)           │
+│  Enter → edition picker  │  ★ test  2.6.0.ultimate                   │
+│  → configure → install   │   [d]elete site                           │
+├──────────────────────────┴────────────────────────────────────────────┤
+│  Log Panel — job tabs + live output from install/management jobs      │
+│  ⟳ install 2.6.0  ✓ rm 2.5.0                                         │
+├───────────────────────────────────────────────────────────────────────┤
+│  Key hints (context-sensitive)                                        │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -43,49 +42,67 @@ Ratatui uses a constraint-based layout system. You describe proportions and mini
 ```rust
 use ratatui::layout::{Constraint, Direction, Layout};
 
-// Split the frame into three vertical bands
-let [tabs_area, body_area, footer_area] = Layout::vertical([
-    Constraint::Length(3),     // tabs: fixed 3 rows
-    Constraint::Min(0),        // body: takes all remaining space
-    Constraint::Length(3),     // footer: fixed 3 rows
-]).areas(frame.area());
+// Four vertical bands
+let outer = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([
+        Constraint::Length(3),  // tab bar
+        Constraint::Min(0),     // body (flexes to fill)
+        Constraint::Length(8),  // log panel
+        Constraint::Length(3),  // footer
+    ])
+    .split(area);
 
-// Split body horizontally: 60% left, 40% right
-let [left_area, right_area] = Layout::horizontal([
-    Constraint::Percentage(60),
-    Constraint::Percentage(40),
-]).areas(body_area);
+// Body: left 60%, right 40%
+let body = Layout::default()
+    .direction(Direction::Horizontal)
+    .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+    .split(outer[1]);
 ```
 
 See [[Ratatui TUI Framework]] for more on the widget system.
 
 ---
 
+## Pane Focus
+
+Four panes can hold focus: `VersionBrowser`, `InstalledVersions`, `InstalledSites`, `LogPanel`. The active pane has a cyan border; inactive panes use dark-grey borders.
+
+Focus switching:
+- `Alt+h/l/j/k` (or `Ctrl+←/→/↓/↑`) — spatial navigation between panes
+- Mouse click — clicks the clicked pane into focus
+
+---
+
 ## The Right Pane Is Persistent
 
-The right pane always shows the same content regardless of which screen is active on the left. It renders `App::installed_versions` and `App::installed_sites`, populated once at startup.
+The right pane always shows installed versions (top) and sites (bottom) regardless of left pane state. Engineers want to see what's already installed while choosing what to install next.
 
-This is a deliberate UX decision: engineers want to see what's already installed while choosing what to install next.
+If `omd` is unavailable, both lists show "(none found)". See [[Installed Versions and Sites Panel]] and [[Error Handling Strategy]].
 
-If `omd` is unavailable, both lists show "(none found)" — the app does not crash. See [[Installed Versions and Sites Panel]] and [[Error Handling Strategy]].
+---
+
+## Log Panel
+
+The log panel is always visible at the bottom. It shows a tab bar (one tab per background job) and the output of the selected job. See [[Log Panel]] for the full feature description.
 
 ---
 
 ## Footer Key Hints
 
-The footer shows context-sensitive key hints based on `self.screen`. This is a simple `match` on the screen variant returning a static string. It avoids cluttering the main content area with help text.
+The footer shows context-sensitive key hints based on `active_pane` and the current sub-mode. A single `match` on `(active_pane, left_mode, right_mode)` returns a static string. It avoids cluttering the content area with help text.
 
 ---
 
-## Tabs
+## Version Tabs
 
-The tabs widget displays base versions as tab labels: `2.6.0 | 2.5.0 | 2.4.0 | …`. Switching tabs (h/l or ←/→) changes `App::active_tab`, which filters which `VersionGroup` is shown in the left pane table.
+The top tab bar displays base versions: `2.6.0 | 2.5.0 | 2.4.0 | …`. `Tab`/`ShiftTab` cycles through them; changing `active_tab` filters which `VersionGroup` is shown in the version browser.
 
-See [[Version List Screen]] for version grouping logic.
+A braille spinner (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) appears next to the app name while a background refresh is in flight. See [[Background Refresh]].
 
 ---
 
 ## Metadata
 
 **Tags:** architecture
-**Related:** [[App State Machine]], [[Ratatui TUI Framework]], [[TUI Event Loop]], [[Installed Versions and Sites Panel]]
+**Related:** [[App State Machine]], [[Ratatui TUI Framework]], [[TUI Event Loop]], [[Installed Versions and Sites Panel]], [[Log Panel]], [[Background Refresh]]

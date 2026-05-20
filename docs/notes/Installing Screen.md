@@ -1,11 +1,16 @@
 ---
 title: Installing Screen
 tags: [feature]
-status: inprogress
-priority: 2
-publish: true
+status: archived
+priority: 1
+publish: false
 aliases: [installing, install screen, Installing]
 ---
+
+> **Archived** — the app no longer has a dedicated "Installing" screen. Live install output now streams into the [[Log Panel]] at the bottom of the multi-pane layout. This note is kept for historical context only.
+
+---
+
 
 # Installing Screen
 
