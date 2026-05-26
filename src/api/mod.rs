@@ -129,6 +129,7 @@ impl Version {
                 Edition::Pro,
                 Edition::Ultimate,
                 Edition::Ultimatemt,
+                Edition::Cloud,
             ]
         } else {
             &[Edition::Cee, Edition::Cre, Edition::Cloud, Edition::Cme]

@@ -23,6 +23,7 @@ use anyhow::{bail, Context, Result};
 use std::process::Command;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
+use tokio::time::{sleep, Duration};
 
 // ── Install Config ───────────────────────────────────────────────────────────
 
@@ -328,6 +329,12 @@ pub fn spawn_install(config: InstallConfig, job_id: JobId, tx: mpsc::UnboundedSe
                 // Use the omd_version (which has dots in dates), not config.version
                 // (which has hyphens). e.g. "2.6.0-2026.04.03.ultimate"
                 let omd_full = format!("{}.{}", config.omd_version, config.edition);
+
+                // Cloud edition requires mock-auth to be running before site setup.
+                if config.edition == "cloud" {
+                    ensure_mock_auth(job_id, &tx).await;
+                }
+
                 let site_label = format!("cmk-dev-site {omd_full} -n {}", config.site_name);
 
                 crate::debug::log(&format!(
@@ -488,6 +495,11 @@ pub fn spawn_create_site(
     ));
 
     tokio::spawn(async move {
+        // Cloud edition requires mock-auth to be running before cmk-dev-site.
+        if omd_version.ends_with(".cloud") {
+            ensure_mock_auth(job_id, &tx).await;
+        }
+
         let _ = tx.send(JobMessage::Output(
             job_id,
             format!("→ cmk-dev-site {omd_version} -n {site_name}"),
@@ -504,6 +516,65 @@ pub fn spawn_create_site(
 
         let _ = tx.send(JobMessage::Finished(job_id, success));
     });
+}
+
+/// Ensures `cmk-dev-site-mock-auth` is running before cloud site setup.
+///
+/// Cloud edition uses a mock authentication service that must be running
+/// before `cmk-dev-site` creates the site. This function:
+///   1. Checks if it is already running with `pgrep -f`.
+///   2. If not, spawns it detached in the background.
+///   3. Waits briefly so it can bind its port before `cmk-dev-site` proceeds.
+///
+/// The function is intentionally non-fatal — if it fails to start the process
+/// a warning is emitted and the caller continues (cmk-dev-site will fail with
+/// a clear error if mock-auth is truly required).
+async fn ensure_mock_auth(job_id: JobId, tx: &mpsc::UnboundedSender<JobMessage>) {
+    let already_running = tokio::process::Command::new("pgrep")
+        .args(["-f", "cmk-dev-site-mock-auth"])
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if already_running {
+        crate::debug::log("ensure_mock_auth: already running");
+        let _ = tx.send(JobMessage::Output(
+            job_id,
+            "  (cmk-dev-site-mock-auth already running)".to_string(),
+        ));
+        return;
+    }
+
+    let _ = tx.send(JobMessage::Output(
+        job_id,
+        "→ cmk-dev-site-mock-auth &".to_string(),
+    ));
+
+    // Spawn detached: we intentionally do not await or stream the child's
+    // output — mock-auth is a long-running server, not a one-shot command.
+    match tokio::process::Command::new("cmk-dev-site-mock-auth")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(_child) => {
+            crate::debug::log("ensure_mock_auth: started, waiting 2 s for bind");
+            // Give the server time to bind its port before cmk-dev-site connects.
+            sleep(Duration::from_secs(2)).await;
+            let _ = tx.send(JobMessage::Output(
+                job_id,
+                "  (cmk-dev-site-mock-auth started)".to_string(),
+            ));
+        }
+        Err(e) => {
+            crate::debug::log(&format!("ensure_mock_auth: failed to start: {e}"));
+            let _ = tx.send(JobMessage::Output(
+                job_id,
+                format!("  warning: failed to start cmk-dev-site-mock-auth: {e}"),
+            ));
+        }
+    }
 }
 
 /// Runs a command asynchronously, streaming stdout and stderr line-by-line
