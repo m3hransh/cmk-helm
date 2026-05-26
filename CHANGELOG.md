@@ -11,9 +11,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Add git-cliff changelog setup and initial CHANGELOG.md
 
 
+### Documentation
+
+- Update CHANGELOG.md with post-v0.1.0 unreleased changes
+
+
 ### Features
 
 - Show version in tab bar title and splash screen
+
+- Auto-start mock-auth and add Cloud to newer-version editions
 
 
 ## [0.1.0] — 2026-05-20
