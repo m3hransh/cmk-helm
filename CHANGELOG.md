@@ -4,16 +4,25 @@ All notable changes to CMK Helm are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] — 2026-06-15
+
+### Bug Fixes
+
+- Offer Pro/Ultimate editions for 3.0+ versions
+
 
 ### Chores
 
 - Add git-cliff changelog setup and initial CHANGELOG.md
 
+- Bump cmk-dev-site to 1.17.0
+
 
 ### Documentation
 
 - Update CHANGELOG.md with post-v0.1.0 unreleased changes
+
+- Regenerate CHANGELOG.md
 
 
 ### Features
