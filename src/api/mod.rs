@@ -117,13 +117,12 @@ impl Version {
 
     /// Editions that make sense for this version's base branch.
     pub fn available_editions(&self) -> &'static [Edition] {
-        let minor: u32 = self
-            .base
-            .split('.')
-            .nth(1)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        if minor >= 5 {
+        // The Pro/Ultimate editions arrived in 2.5; everything from 2.5 onward
+        // (including 3.0+) uses them. We must compare the whole (major, minor)
+        // pair — checking the minor alone would misclassify e.g. "3.0" as old,
+        // since its minor (0) is < 5 despite 3.0 being newer than 2.5.
+        let (major, minor, _) = parse_semver(&self.base);
+        if (major, minor) >= (2, 5) {
             &[
                 Edition::Community,
                 Edition::Pro,
@@ -425,10 +424,21 @@ mod tests {
             kind: VersionKind::StablePatch { patch: 1 },
             timestamp: "".into(),
         };
+        // Regression: 3.0's minor (0) is < 5, but 3.0 > 2.5, so it must still
+        // get the new Pro/Ultimate editions — we compare (major, minor), not
+        // minor alone.
+        let v30 = Version {
+            base: "3.0.0".into(),
+            kind: VersionKind::Daily { date: "x".into() },
+            timestamp: "".into(),
+        };
         assert!(v25.available_editions().contains(&Edition::Pro));
         assert!(v24.available_editions().contains(&Edition::Cee));
         assert!(!v25.available_editions().contains(&Edition::Cee));
         assert!(!v24.available_editions().contains(&Edition::Pro));
+        assert!(v30.available_editions().contains(&Edition::Pro));
+        assert!(v30.available_editions().contains(&Edition::Ultimate));
+        assert!(!v30.available_editions().contains(&Edition::Cee));
     }
 
     // ── Integration test ──────────────────────────────────────────────────────
