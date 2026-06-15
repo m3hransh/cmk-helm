@@ -125,19 +125,15 @@
 
         cmk-dev-site-pkg = pkgs.python3Packages.buildPythonPackage {
           pname = "cmk-dev-site";
-          version = "1.15.2";
+          version = "1.17.0";
           format = "wheel";
           src = pkgs.fetchurl {
-            url = "https://files.pythonhosted.org/packages/e8/1b/441d3a55cf7893608292444d1bed08d5f8be1f57f6a7dbd6c75736693ad6/cmk_dev_site-1.15.2-py3-none-any.whl";
-            hash = "sha256-JK2eg0/1qGUm4yGHqZ9LA8IpiaSR4h0XMv3TnDVo9X4=";
+            url = "https://files.pythonhosted.org/packages/35/f5/f29c25652f3f4b4547baa283944876e6a8547966431933d77be0c9b85b69/cmk_dev_site-1.17.0-py3-none-any.whl";
+            hash = "sha256-Y0JPhikiil+5QN5sN+LFdHN6fZQGqWadmOX6Mrkox74=";
           };
           dependencies = with pkgs.python3Packages; [
             requests pyjwt cryptography fastapi uvicorn python-multipart
           ] ++ [ checkmk-dev-tools ];
-          # The published 1.15.2 wheel declares checkmk-dev-tools<1 (stale).
-          # The constraint has been fixed upstream in cmk-dev-site's pyproject.toml;
-          # remove this once a new release is published to PyPI.
-          pythonRelaxDeps = [ "checkmk-dev-tools" ];
           doCheck = false;
         };
 
