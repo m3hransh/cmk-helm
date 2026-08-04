@@ -118,8 +118,12 @@ nix profile upgrade cmk-helm
 |-----|--------|
 | `j` / `k` | Navigate |
 | `d` | Delete selected version |
+| `D` | Delete **all** unused versions (no site uses them, and not the omd default) |
 | `s` | Create a new site from this version |
 | `q` / `Esc` | Quit |
+
+Version rows are marked `●` (a site runs it), `★` (omd default version), or `○` (unused —
+what `D` removes). The pane title shows how many are unused.
 
 ### Installed Sites
 

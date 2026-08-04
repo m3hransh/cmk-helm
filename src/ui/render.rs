@@ -18,7 +18,7 @@ use ratatui::{
 use crate::api::VersionKind;
 use crate::installer::JobStatus;
 
-use super::state::{ActivePane, CMK_BLUE, CMK_GREEN, LeftPaneMode, RightPaneMode};
+use super::state::{ActivePane, LeftPaneMode, RightPaneMode, CMK_BLUE, CMK_GREEN};
 use super::App;
 
 impl App {
@@ -110,7 +110,9 @@ impl App {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 face,
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             )))
             .alignment(Alignment::Center),
             row(2),
@@ -402,19 +404,59 @@ impl App {
                 (area, None)
             };
 
+        // Mark each version so the effect of `D` (prune) is visible before the
+        // key is pressed:
+        //   ★  omd default version — protected, never pruned
+        //   ●  backs at least one site — protected
+        //   ○  unused — a prune candidate
+        let in_use: std::collections::HashSet<&str> = self
+            .installed_sites
+            .iter()
+            .map(|s| s.version.trim())
+            .collect();
+        let default = self.default_version.as_deref().map(str::trim);
+
         let items: Vec<ListItem> = if self.installed_versions.is_empty() {
             vec![ListItem::new("  (none found)").style(Style::default().fg(Color::DarkGray))]
         } else {
             self.installed_versions
                 .iter()
-                .map(|v| ListItem::new(format!(" {v}")).style(Style::default().fg(Color::Gray)))
+                .map(|v| {
+                    let v_trim = v.trim();
+                    let (marker, marker_fg, text_fg) = if default == Some(v_trim) {
+                        ("★ ", Color::Yellow, Color::Gray)
+                    } else if in_use.contains(v_trim) {
+                        ("● ", CMK_GREEN, Color::Gray)
+                    } else {
+                        ("○ ", Color::DarkGray, Color::DarkGray)
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(marker, Style::default().fg(marker_fg)),
+                        Span::styled(v.clone(), Style::default().fg(text_fg)),
+                    ]))
+                })
                 .collect()
+        };
+
+        // Title carries the unused count so `D` is discoverable and its effect
+        // is known before pressing it. Counted the same way as the prune itself
+        // so the number and the action can never disagree.
+        let unused_count = crate::installer::unused_versions(
+            &self.installed_versions,
+            &self.installed_sites,
+            default,
+        )
+        .len();
+        let title = if unused_count == 0 {
+            " Installed Versions ".to_string()
+        } else {
+            format!(" Installed Versions ({unused_count} unused) ")
         };
 
         let list = List::new(items)
             .block(
                 Block::default()
-                    .title(" Installed Versions ")
+                    .title(title)
                     .borders(Borders::ALL)
                     .border_style(border_style(is_focused)),
             )
@@ -544,10 +586,8 @@ impl App {
 
         if self.jobs.is_empty() {
             frame.render_widget(
-                Paragraph::new(
-                    "  No jobs yet. Select a version and press Enter to install.",
-                )
-                .style(Style::default().fg(Color::DarkGray)),
+                Paragraph::new("  No jobs yet. Select a version and press Enter to install.")
+                    .style(Style::default().fg(Color::DarkGray)),
                 inner,
             );
             return;
@@ -649,7 +689,7 @@ impl App {
                     "  Type site name  Backspace del  Enter create  Esc cancel"
                 }
                 RightPaneMode::Browse => {
-                    "  j/k navigate  d delete  s create site  Alt+hjkl pane  q/Esc quit"
+                    "  j/k navigate  d delete  D prune unused  s create site  Alt+hjkl pane  q/Esc quit"
                 }
             },
             ActivePane::InstalledSites => match &self.right_mode {
@@ -688,5 +728,87 @@ fn border_style(is_focused: bool) -> Style {
         Style::default().fg(Color::Cyan)
     } else {
         Style::default().fg(Color::DarkGray)
+    }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+//
+// Rust concept: Ratatui ships a `TestBackend` that renders into an in-memory
+// buffer instead of a terminal, so rendering can be asserted like any other
+// pure function — no TTY, no subprocesses.
+#[cfg(test)]
+mod tests {
+    use crate::installer::InstalledSite;
+    use crate::ui::App;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    /// Renders a whole frame and returns it as one string per row, joined.
+    fn render_to_string(app: &mut App) -> String {
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| app.render(frame))
+            .expect("draw succeeds");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(100)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn installed_versions_pane_marks_in_use_default_and_unused() {
+        let mut app = App::new(
+            Vec::new(),
+            vec![
+                "2.4.0p24.cee".to_string(),         // backs site v240 → ●
+                "2.5.0b3.cre".to_string(),          // omd default     → ★
+                "2.6.0-2026.03.31.cee".to_string(), // unused       → ○
+            ],
+            vec![InstalledSite {
+                name: "v240".to_string(),
+                version: "2.4.0p24.cee".to_string(),
+                is_default: false,
+            }],
+            Some("2.5.0b3.cre".to_string()),
+        );
+
+        let screen = render_to_string(&mut app);
+
+        assert!(screen.contains("● 2.4.0p24.cee"), "in-use marker\n{screen}");
+        assert!(screen.contains("★ 2.5.0b3.cre"), "default marker\n{screen}");
+        assert!(
+            screen.contains("○ 2.6.0-2026.03.31.cee"),
+            "unused marker\n{screen}"
+        );
+        // Only the one genuinely unused version is counted as a prune candidate.
+        assert!(
+            screen.contains("Installed Versions (1 unused)"),
+            "unused count in title\n{screen}"
+        );
+    }
+
+    #[test]
+    fn installed_versions_title_hides_count_when_nothing_is_prunable() {
+        let mut app = App::new(
+            Vec::new(),
+            vec!["2.4.0p24.cee".to_string()],
+            vec![InstalledSite {
+                name: "v240".to_string(),
+                version: "2.4.0p24.cee".to_string(),
+                is_default: true,
+            }],
+            None,
+        );
+
+        let screen = render_to_string(&mut app);
+        assert!(
+            screen.contains("Installed Versions "),
+            "plain title\n{screen}"
+        );
+        assert!(!screen.contains("unused)"), "no count shown\n{screen}");
     }
 }

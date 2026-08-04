@@ -94,6 +94,7 @@ These notes explain Rust patterns as they appear in this codebase. If you're com
 | [[Configure Screen]] | Entering site name and confirming install config |
 | [[Log Panel]] | Per-job tabs, live output, copy-paste mode |
 | [[Installed Versions and Sites Panel]] | Right-hand panel showing local OMD state |
+| [[Prune Unused Versions]] | `D` — bulk-delete every version no site uses |
 | [[Background Refresh]] | Auto-refresh every 30 s and manual `r` key |
 | [[Credential Auth]] | How `~/.cmk-credentials` is read and used |
 

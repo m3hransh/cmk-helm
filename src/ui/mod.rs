@@ -30,9 +30,9 @@
 //   render.rs — impl App: all Ratatui rendering
 //   mod.rs    — App struct, constructors, event loop, job system (this file)
 
-mod state;
 mod input;
 mod render;
+mod state;
 
 use anyhow::Result;
 use ratatui::{
@@ -71,6 +71,9 @@ pub struct App {
     versions_list_state: ListState,
     installed_sites: Vec<InstalledSite>,
     sites_list_state: ListState,
+    /// omd's default version. Rendered with a ★ and excluded from prune (`D`)
+    /// because deleting it breaks the `/omd/versions/default` link.
+    default_version: Option<String>,
 
     // ── Job system ────────────────────────────────────────────────────────────
     //
@@ -118,12 +121,14 @@ impl App {
         version_groups: Vec<VersionGroup>,
         installed_versions: Vec<String>,
         installed_sites: Vec<InstalledSite>,
+        default_version: Option<String>,
     ) -> Self {
         let mut app = Self::new_loading_inner();
         app.load_rx = None;
         app.version_groups = version_groups;
         app.installed_versions = installed_versions;
         app.installed_sites = installed_sites;
+        app.default_version = default_version;
         app
     }
 
@@ -148,6 +153,7 @@ impl App {
             versions_list_state: ListState::default(),
             installed_sites: Vec::new(),
             sites_list_state: ListState::default(),
+            default_version: None,
             jobs: Vec::new(),
             next_job_id: 0,
             job_tx,
@@ -212,6 +218,7 @@ impl App {
                     self.version_groups = data.version_groups;
                     self.installed_versions = data.installed_versions;
                     self.installed_sites = data.installed_sites;
+                    self.default_version = data.default_version;
                     if !self.installed_versions.is_empty() {
                         self.versions_list_state.select(Some(0));
                     }
@@ -252,9 +259,14 @@ impl App {
                     crate::api::fetch_versions(crate::api::CMK_DOWNLOAD_URL).await?;
                 let installed_versions =
                     crate::installer::list_installed_versions().unwrap_or_default();
-                let installed_sites =
-                    crate::installer::list_installed_sites().unwrap_or_default();
-                Ok(LoadResult { version_groups, installed_versions, installed_sites })
+                let installed_sites = crate::installer::list_installed_sites().unwrap_or_default();
+                let default_version = crate::installer::default_version();
+                Ok(LoadResult {
+                    version_groups,
+                    installed_versions,
+                    installed_sites,
+                    default_version,
+                })
             }
             .await;
             let _ = tx.send(result);
@@ -270,6 +282,7 @@ impl App {
                     self.version_groups = data.version_groups;
                     self.installed_versions = data.installed_versions;
                     self.installed_sites = data.installed_sites;
+                    self.default_version = data.default_version;
                     self.is_refreshing = false;
                     self.last_refresh = Instant::now();
 
@@ -284,7 +297,11 @@ impl App {
                     let iv_len = self.installed_versions.len();
                     if iv_len == 0 {
                         self.versions_list_state.select(None);
-                    } else if self.versions_list_state.selected().is_none_or(|i| i >= iv_len) {
+                    } else if self
+                        .versions_list_state
+                        .selected()
+                        .is_none_or(|i| i >= iv_len)
+                    {
                         self.versions_list_state.select(Some(0));
                     }
                     let is_len = self.installed_sites.len();
@@ -340,10 +357,11 @@ impl App {
         }
     }
 
-    /// Re-reads installed versions and sites from omd.
+    /// Re-reads installed versions, sites, and the default version from omd.
     fn refresh_installed(&mut self) {
         self.installed_versions = installer::list_installed_versions().unwrap_or_default();
         self.installed_sites = installer::list_installed_sites().unwrap_or_default();
+        self.default_version = installer::default_version();
 
         // Keep selection in bounds after refresh.
         if self.installed_versions.is_empty() {
@@ -379,7 +397,11 @@ impl App {
         );
         // Short tab title: base version only (drop the date/patch suffix).
         // omd_version is e.g. "2.6.0-2026.04.07" or "2.4.0p24".
-        let base = config.omd_version.split('-').next().unwrap_or(&config.omd_version);
+        let base = config
+            .omd_version
+            .split('-')
+            .next()
+            .unwrap_or(&config.omd_version);
         let short_label = format!("install {base}");
 
         crate::debug::log(&format!("spawn_install_job: id={job_id} label={label}"));

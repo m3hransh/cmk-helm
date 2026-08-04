@@ -10,7 +10,9 @@
 // modules can see private items declared in their parent module.
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
 use ratatui::{layout::Rect, widgets::ListState};
 
 use crate::installer;
@@ -413,6 +415,37 @@ impl App {
                     }
                 }
             }
+            // Shift+D — prune: delete every version nothing is using (no site
+            // backs it and it is not omd's default).
+            //
+            // The candidate list is computed here and stored in the confirm
+            // prompt, so what the user confirms is exactly what was counted
+            // (a background refresh between keypress and confirm can't change
+            // the set out from under them).
+            KeyCode::Char('D') => {
+                let unused = installer::unused_versions(
+                    &self.installed_versions,
+                    &self.installed_sites,
+                    self.default_version.as_deref(),
+                );
+                if !unused.is_empty() {
+                    let preview = unused
+                        .iter()
+                        .map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    crate::debug::log(&format!(
+                        "prune: {} unused versions: {preview}",
+                        unused.len()
+                    ));
+                    self.right_mode = RightPaneMode::ConfirmDelete {
+                        label: format!("Delete {} unused version(s)?", unused.len()),
+                        target: DeleteTarget::UnusedVersions(unused),
+                    };
+                }
+                // Nothing unused → no prompt. The pane title shows the unused
+                // count, so there is no surprise in the key doing nothing.
+            }
             KeyCode::Char('s') => {
                 if let Some(idx) = self.versions_list_state.selected() {
                     if let Some(version) = self.installed_versions.get(idx) {
@@ -498,8 +531,27 @@ impl App {
                         });
                         self.selected_job = Some(self.jobs.len() - 1);
                         self.log_scroll = 0;
-                        installer::spawn_delete_version(
-                            version_owned,
+                        installer::spawn_delete_version(version_owned, job_id, self.job_tx.clone());
+                    }
+                    DeleteTarget::UnusedVersions(versions) => {
+                        let job_id = self.next_job_id;
+                        self.next_job_id += 1;
+                        let count = versions.len();
+                        let label =
+                            format!("delete {count} unused versions: {}", versions.join(", "));
+                        let short_label = format!("prune {count}");
+                        let versions_owned = versions.clone();
+                        self.jobs.push(installer::Job {
+                            id: job_id,
+                            label,
+                            short_label,
+                            status: installer::JobStatus::Running,
+                            output: Vec::new(),
+                        });
+                        self.selected_job = Some(self.jobs.len() - 1);
+                        self.log_scroll = 0;
+                        installer::spawn_delete_versions(
+                            versions_owned,
                             job_id,
                             self.job_tx.clone(),
                         );
@@ -580,10 +632,8 @@ impl App {
         if self.copy_mode {
             if code == KeyCode::Esc {
                 self.copy_mode = false;
-                let _ = crossterm::execute!(
-                    std::io::stdout(),
-                    crossterm::event::EnableMouseCapture
-                );
+                let _ =
+                    crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
             }
             // Don't return — still allow scrolling / tab switching below.
         }
@@ -617,10 +667,8 @@ impl App {
             // handle mouse events for text selection.
             KeyCode::Char('c') if !self.copy_mode => {
                 self.copy_mode = true;
-                let _ = crossterm::execute!(
-                    std::io::stdout(),
-                    crossterm::event::DisableMouseCapture
-                );
+                let _ =
+                    crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
             }
             KeyCode::Esc if !self.copy_mode => self.should_quit = true,
             _ => {}

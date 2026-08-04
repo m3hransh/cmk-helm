@@ -31,7 +31,13 @@ async fn main() -> Result<()> {
             debug::log(&format!("fetched {} version groups", version_groups.len()));
             let installed_versions = installer::list_installed_versions().unwrap_or_default();
             let installed_sites = installer::list_installed_sites().unwrap_or_default();
-            Ok(ui::LoadResult { version_groups, installed_versions, installed_sites })
+            let default_version = installer::default_version();
+            Ok(ui::LoadResult {
+                version_groups,
+                installed_versions,
+                installed_sites,
+                default_version,
+            })
         }
         .await;
         let _ = tx.send(result);

@@ -21,6 +21,9 @@ pub struct LoadResult {
     pub version_groups: Vec<VersionGroup>,
     pub installed_versions: Vec<String>,
     pub installed_sites: Vec<InstalledSite>,
+    /// omd's default version, if it reports one. Kept alongside the installed
+    /// list because prune (`D`) must never remove it.
+    pub default_version: Option<String>,
 }
 
 // ── Pane Focus ────────────────────────────────────────────────────────────────
@@ -89,6 +92,11 @@ pub(crate) enum RightPaneMode {
 pub(crate) enum DeleteTarget {
     Version(String),
     Site(String),
+    /// Every installed version that no OMD site is using — the batch prune
+    /// triggered by `D` in the Installed Versions pane. The list is captured
+    /// when the prompt opens so the confirmation cannot drift from what the
+    /// user was shown.
+    UnusedVersions(Vec<String>),
 }
 
 // ── Pane Geometry ─────────────────────────────────────────────────────────────

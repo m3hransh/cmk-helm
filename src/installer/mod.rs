@@ -188,6 +188,36 @@ pub fn list_installed_versions() -> Result<Vec<String>> {
     Ok(versions)
 }
 
+/// Returns the version omd uses as its default, if any.
+///
+/// Runs `omd versions` (without `-b`), which marks one line with "(default)":
+///
+/// ```text
+/// 2.3.0-2026.07.10.cee
+/// 2.4.0-2026.07.28.cre (default)
+/// ```
+///
+/// The default backs the `/omd/versions/default` symlink and is what
+/// `omd create` picks without `-V`, so it must never be pruned even when no
+/// site uses it. Returns `None` if omd fails — callers treat that as "unknown"
+/// and simply lose the protection rather than erroring out.
+pub fn default_version() -> Option<String> {
+    let output = Command::new("omd").args(["versions"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = std::str::from_utf8(&output.stdout).ok()?;
+
+    stdout.lines().find_map(|line| {
+        let line = line.trim();
+        // `strip_suffix` returns Some(rest) only when the suffix matched —
+        // an Option-returning "check and trim" in one step.
+        line.strip_suffix("(default)")
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    })
+}
+
 // ── Installed Sites ───────────────────────────────────────────────────────────
 
 /// A site registered with OMD.
@@ -249,6 +279,42 @@ pub fn list_installed_sites() -> Result<Vec<InstalledSite>> {
         .collect();
 
     Ok(sites)
+}
+
+/// Returns the installed versions that nothing is using — the prune candidates.
+///
+/// A version counts as "in use" when either
+///   * some site's version string equals it, or
+///   * it is omd's default version (`default_version`) — removing that breaks
+///     `/omd/versions/default` and bare `omd create`.
+///
+/// Both lists come from omd and use the same full version format, so an exact
+/// string comparison is enough:
+///
+///   `omd versions -b` → "2.6.0-2026.03.31.ultimate"
+///   `omd sites`       → "2.6.0-2026.03.31.ultimate" (VERSION column)
+///
+/// Rust concept: the parameters are slices (`&[String]`) and an `Option<&str>`,
+/// not owned values — the caller keeps ownership and we only borrow to read.
+/// The return value is owned (`Vec<String>`) because it outlives the borrow.
+pub fn unused_versions(
+    installed: &[String],
+    sites: &[InstalledSite],
+    default_version: Option<&str>,
+) -> Vec<String> {
+    // A HashSet of borrowed `&str` gives O(1) membership tests without
+    // allocating a copy of every site version.
+    let mut in_use: std::collections::HashSet<&str> =
+        sites.iter().map(|s| s.version.trim()).collect();
+    if let Some(default) = default_version {
+        in_use.insert(default.trim());
+    }
+
+    installed
+        .iter()
+        .filter(|v| !in_use.contains(v.trim()))
+        .cloned()
+        .collect()
 }
 
 // ── Job System ───────────────────────────────────────────────────────────────
@@ -386,48 +452,108 @@ pub fn spawn_delete_version(version: String, job_id: JobId, tx: mpsc::UnboundedS
     ));
 
     tokio::spawn(async move {
-        let install_path = format!("/omd/versions/{version}");
+        let success = delete_version(&version, job_id, &tx).await;
+        let _ = tx.send(JobMessage::Finished(job_id, success));
+    });
+}
 
-        // Step 1: remove the installation directory.
-        let _ = tx.send(JobMessage::Output(
-            job_id,
-            format!("→ sudo rm -rf {install_path}"),
-        ));
-        let ok = run_streaming("sudo", &["rm", "-rf", &install_path], job_id, &tx)
-            .await
-            .unwrap_or(false);
-        if !ok {
-            let _ = tx.send(JobMessage::Finished(job_id, false));
-            return;
-        }
+/// Removes several versions **sequentially** inside a single job.
+///
+/// Sequential rather than concurrent on purpose: each removal may run
+/// `apt-get purge`, and apt holds an exclusive lock on its database — two
+/// purges at once would fail with "could not get lock /var/lib/dpkg/lock".
+///
+/// The job succeeds only if every removal succeeded; a per-version summary is
+/// streamed to the log so a partial failure is visible.
+pub fn spawn_delete_versions(
+    versions: Vec<String>,
+    job_id: JobId,
+    tx: mpsc::UnboundedSender<JobMessage>,
+) {
+    crate::debug::log(&format!(
+        "spawn_delete_versions: job_id={job_id} count={} versions={}",
+        versions.len(),
+        versions.join(", ")
+    ));
 
-        // Step 2: derive the deb package name and purge it if installed.
-        // omd version format: "2.6.0-2026.04.10.ultimate" or "2.4.0p24.cee"
-        // The edition is the suffix after the last dot.
-        if let Some(pkg_name) = omd_version_to_pkg_name(&version) {
-            // Check if the deb is installed before trying to purge.
-            let _ = tx.send(JobMessage::Output(job_id, format!("→ dpkg -l {pkg_name}")));
-            let installed = run_streaming("dpkg", &["-l", &pkg_name], job_id, &tx)
-                .await
-                .unwrap_or(false);
+    tokio::spawn(async move {
+        let total = versions.len();
+        let mut failed: Vec<&String> = Vec::new();
 
-            if installed {
-                let _ = tx.send(JobMessage::Output(
-                    job_id,
-                    format!("→ sudo apt-get purge -y {pkg_name}"),
-                ));
-                let _ = run_streaming("sudo", &["apt-get", "purge", "-y", &pkg_name], job_id, &tx)
-                    .await;
-            } else {
-                let _ = tx.send(JobMessage::Output(
-                    job_id,
-                    "  (deb package not found, skipping purge)".to_string(),
-                ));
+        // Rust concept: `iter().enumerate()` yields (index, &item) pairs —
+        // the borrow keeps `versions` alive for the whole loop, which is why
+        // `failed` can hold references into it.
+        for (i, version) in versions.iter().enumerate() {
+            let _ = tx.send(JobMessage::Output(
+                job_id,
+                format!("── [{}/{total}] {version} ──", i + 1),
+            ));
+            if !delete_version(version, job_id, &tx).await {
+                failed.push(version);
             }
         }
 
-        let _ = tx.send(JobMessage::Finished(job_id, true));
+        let _ = tx.send(JobMessage::Output(
+            job_id,
+            format!("removed {}/{total} unused versions", total - failed.len()),
+        ));
+        for version in &failed {
+            let _ = tx.send(JobMessage::Output(job_id, format!("  failed: {version}")));
+        }
+
+        let _ = tx.send(JobMessage::Finished(job_id, failed.is_empty()));
     });
+}
+
+/// Removes one version. Returns true on success.
+///
+/// Shared by `spawn_delete_version` (single) and `spawn_delete_versions`
+/// (batch) — neither sends `Finished`, that is the caller's job so a batch
+/// reports one result for the whole run.
+async fn delete_version(
+    version: &str,
+    job_id: JobId,
+    tx: &mpsc::UnboundedSender<JobMessage>,
+) -> bool {
+    let install_path = format!("/omd/versions/{version}");
+
+    // Step 1: remove the installation directory.
+    let _ = tx.send(JobMessage::Output(
+        job_id,
+        format!("→ sudo rm -rf {install_path}"),
+    ));
+    let ok = run_streaming("sudo", &["rm", "-rf", &install_path], job_id, tx)
+        .await
+        .unwrap_or(false);
+    if !ok {
+        return false;
+    }
+
+    // Step 2: derive the deb package name and purge it if installed.
+    // omd version format: "2.6.0-2026.04.10.ultimate" or "2.4.0p24.cee"
+    // The edition is the suffix after the last dot.
+    if let Some(pkg_name) = omd_version_to_pkg_name(version) {
+        // Check if the deb is installed before trying to purge.
+        let _ = tx.send(JobMessage::Output(job_id, format!("→ dpkg -l {pkg_name}")));
+        let installed = run_streaming("dpkg", &["-l", &pkg_name], job_id, tx)
+            .await
+            .unwrap_or(false);
+
+        if installed {
+            let _ = tx.send(JobMessage::Output(
+                job_id,
+                format!("→ sudo apt-get purge -y {pkg_name}"),
+            ));
+            let _ = run_streaming("sudo", &["apt-get", "purge", "-y", &pkg_name], job_id, tx).await;
+        } else {
+            let _ = tx.send(JobMessage::Output(
+                job_id,
+                "  (deb package not found, skipping purge)".to_string(),
+            ));
+        }
+    }
+
+    true
 }
 
 /// Converts an omd version string to an apt package name.
@@ -474,9 +600,14 @@ pub fn spawn_delete_site(site_name: String, job_id: JobId, tx: mpsc::UnboundedSe
             format!("→ sudo omd rm {site_name}"),
         ));
 
-        let success = run_streaming("sudo", &["omd", "-f", "rm", "--kill", "--apache-reload", &site_name], job_id, &tx)
-            .await
-            .unwrap_or(false);
+        let success = run_streaming(
+            "sudo",
+            &["omd", "-f", "rm", "--kill", "--apache-reload", &site_name],
+            job_id,
+            &tx,
+        )
+        .await
+        .unwrap_or(false);
 
         let _ = tx.send(JobMessage::Finished(job_id, success));
     });
@@ -736,5 +867,90 @@ pub fn ensure_sudo() {
         println!("This app needs sudo for install/delete operations.");
         // `-v` validates and caches the credential, prompting if needed.
         let _ = Command::new("sudo").arg("-v").status();
+    }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+//
+// Rust concept: `#[cfg(test)]` compiles this module only for `cargo test`, so
+// test-only code never lands in the release binary. `use super::*` pulls in
+// everything from the parent module, including private items.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn site(name: &str, version: &str) -> InstalledSite {
+        InstalledSite {
+            name: name.to_string(),
+            version: version.to_string(),
+            is_default: false,
+        }
+    }
+
+    #[test]
+    fn unused_versions_excludes_versions_backing_a_site() {
+        let installed = vec![
+            "2.6.0-2026.03.31.ultimate".to_string(),
+            "2.4.0p24.cee".to_string(),
+            "2.5.0b3.cre".to_string(),
+        ];
+        let sites = vec![
+            site("test", "2.6.0-2026.03.31.ultimate"),
+            site("v240", "2.4.0p24.cee"),
+        ];
+
+        assert_eq!(
+            unused_versions(&installed, &sites, None),
+            vec!["2.5.0b3.cre".to_string()]
+        );
+    }
+
+    #[test]
+    fn unused_versions_returns_everything_when_no_sites_exist() {
+        let installed = vec!["2.4.0p24.cee".to_string(), "2.5.0b3.cre".to_string()];
+        assert_eq!(unused_versions(&installed, &[], None), installed);
+    }
+
+    #[test]
+    fn unused_versions_is_empty_when_every_version_is_in_use() {
+        let installed = vec!["2.4.0p24.cee".to_string()];
+        // Two sites can share one version — it is still in use.
+        let sites = vec![site("a", "2.4.0p24.cee"), site("b", "2.4.0p24.cee")];
+        assert!(unused_versions(&installed, &sites, None).is_empty());
+    }
+
+    #[test]
+    fn unused_versions_ignores_surrounding_whitespace() {
+        let installed = vec!["  2.4.0p24.cee  ".to_string()];
+        let sites = vec![site("a", "2.4.0p24.cee")];
+        assert!(unused_versions(&installed, &sites, None).is_empty());
+    }
+
+    #[test]
+    fn unused_versions_protects_the_omd_default_version() {
+        let installed = vec!["2.4.0p24.cee".to_string(), "2.5.0b3.cre".to_string()];
+        // No site uses either version, but the default must survive a prune.
+        assert_eq!(
+            unused_versions(&installed, &[], Some("2.4.0p24.cee")),
+            vec!["2.5.0b3.cre".to_string()]
+        );
+    }
+
+    #[test]
+    fn omd_version_to_pkg_name_maps_editions() {
+        assert_eq!(
+            omd_version_to_pkg_name("2.6.0-2026.04.10.ultimate").as_deref(),
+            Some("check-mk-ultimate-2.6.0-2026.04.10")
+        );
+        assert_eq!(
+            omd_version_to_pkg_name("2.4.0p24.cee").as_deref(),
+            Some("check-mk-enterprise-2.4.0p24")
+        );
+        assert_eq!(
+            omd_version_to_pkg_name("2.5.0b3.cre").as_deref(),
+            Some("check-mk-raw-2.5.0b3")
+        );
+        // No dot → no edition suffix → cannot derive a package name.
+        assert_eq!(omd_version_to_pkg_name("nonsense"), None);
     }
 }
