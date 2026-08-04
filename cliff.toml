@@ -29,6 +29,9 @@ filter_unconventional = true
 split_commits = false
 
 commit_parsers = [
+  # Release commits only bump the version — they are not changelog entries.
+  # Must come before the generic ^chore rule, first match wins.
+  { message = "^chore\\(release\\)", skip = true },
   { message = "^feat",     group = "Features"         },
   { message = "^fix",      group = "Bug Fixes"        },
   { message = "^refactor", group = "Refactoring"      },
