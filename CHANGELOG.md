@@ -4,6 +4,18 @@ All notable changes to CMK Helm are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Chores
+
+- Skip release commits in git-cliff config
+
+
+### Features
+
+- Prune unused versions with D in Installed Versions pane
+
+
 ## [0.2.0] — 2026-06-15
 
 ### Bug Fixes
