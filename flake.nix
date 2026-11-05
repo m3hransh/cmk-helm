@@ -111,11 +111,11 @@
 
         checkmk-dev-tools = pkgs.python3Packages.buildPythonPackage {
           pname = "checkmk-dev-tools";
-          version = "2.2.0";
+          version = "3.0.0";
           format = "wheel";
           src = pkgs.fetchurl {
-            url = "https://files.pythonhosted.org/packages/6b/3f/896e2d62450d9a900b905d33ff4dcdf10b7696525920759e3acc4658b8cd/checkmk_dev_tools-2.2.0-py3-none-any.whl";
-            hash = "sha256-zfQXEzM4zWcLXqFcLs9kv3ekHv95dWKkSe0+/CsOrfk=";
+            url = "https://files.pythonhosted.org/packages/7d/53/31b2feafe42afbb0fd1df32623377b9279f3e64572fc1677f889c474ed26/checkmk_dev_tools-3.0.0-py3-none-any.whl";
+            hash = "sha256-cZBOQ6PU2iCgDBdfnHlE5rqOf5auVtBOmOTY2btWY9w=";
           };
           dependencies = with pkgs.python3Packages; [
             pydantic rich influxdb-client
@@ -125,11 +125,11 @@
 
         cmk-dev-site-pkg = pkgs.python3Packages.buildPythonPackage {
           pname = "cmk-dev-site";
-          version = "1.17.0";
+          version = "1.23.0";
           format = "wheel";
           src = pkgs.fetchurl {
-            url = "https://files.pythonhosted.org/packages/35/f5/f29c25652f3f4b4547baa283944876e6a8547966431933d77be0c9b85b69/cmk_dev_site-1.17.0-py3-none-any.whl";
-            hash = "sha256-Y0JPhikiil+5QN5sN+LFdHN6fZQGqWadmOX6Mrkox74=";
+            url = "https://files.pythonhosted.org/packages/36/c3/d8415e6118ac899a421b12a2e73ace081969c72966d9cd2d482525baa6ea/cmk_dev_site-1.23.0-py3-none-any.whl";
+            hash = "sha256-wGleefMGF7Yjgv5xmaPlj/KnPpqHmJWhZGg4jrwkNHk=";
           };
           dependencies = with pkgs.python3Packages; [
             requests pyjwt cryptography fastapi uvicorn python-multipart
